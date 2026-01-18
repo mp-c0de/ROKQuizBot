@@ -37,7 +37,7 @@ final class AppModel {
 
     // Timer
     private var timer: AnyCancellable?
-    private nonisolated(unsafe) var globalEventMonitor: Any?
+    private var globalEventMonitor: Any?
 
     // MARK: - Init
     init() {
@@ -52,8 +52,10 @@ final class AppModel {
     }
 
     deinit {
-        if let monitor = globalEventMonitor {
-            NSEvent.removeMonitor(monitor)
+        MainActor.assumeIsolated {
+            if let monitor = globalEventMonitor {
+                NSEvent.removeMonitor(monitor)
+            }
         }
     }
 

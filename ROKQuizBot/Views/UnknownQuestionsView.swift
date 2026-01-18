@@ -146,7 +146,7 @@ struct UnknownQuestionsView: View {
     }
 
     private func askAIForAnswer() async {
-        guard let question = selectedQuestion,
+        guard let _ = selectedQuestion,
               let capture = appModel.lastCapture else {
             aiError = "No capture available"
             return

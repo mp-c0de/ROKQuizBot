@@ -139,6 +139,7 @@ struct ContentView: View {
                             .font(.system(.body, design: .monospaced))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding()
+                            .textSelection(.enabled)
                     }
                     .frame(maxHeight: 150)
                 }
