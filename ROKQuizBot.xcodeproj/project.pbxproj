@@ -7,40 +7,24 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		001QUESTIONS /* questions.json in Resources */ = {isa = PBXBuildFile; fileRef = 002QUESTIONS /* questions.json */; };
+		A1B2C3D4E5F60001000A0001 /* questions.json in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60002000A0001 /* questions.json */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		001APP /* ROKQuizBot.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ROKQuizBot.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		002QUESTIONS /* questions.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = questions.json; sourceTree = "<group>"; };
+		A1B2C3D4E5F60003000A0001 /* ROKQuizBot.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ROKQuizBot.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D4E5F60002000A0001 /* questions.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = questions.json; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		003EXCEPTIONS /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				"/Models/",
-				"/Services/",
-				"/Views/",
-				"/Utils/",
-			);
-			target = 004TARGET /* ROKQuizBot */;
-		};
-/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
-
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		005ROOT /* ROKQuizBot */ = {
+		A1B2C3D4E5F60004000A0001 /* ROKQuizBot */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				003EXCEPTIONS /* PBXFileSystemSynchronizedBuildFileExceptionSet */,
-			);
 			path = ROKQuizBot;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		006FRAMEWORKS /* Frameworks */ = {
+		A1B2C3D4E5F60005000A0001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -50,19 +34,19 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		007MAINGROUP = {
+		A1B2C3D4E5F60006000A0001 = {
 			isa = PBXGroup;
 			children = (
-				005ROOT /* ROKQuizBot */,
-				002QUESTIONS /* questions.json */,
-				008PRODUCTS /* Products */,
+				A1B2C3D4E5F60004000A0001 /* ROKQuizBot */,
+				A1B2C3D4E5F60002000A0001 /* questions.json */,
+				A1B2C3D4E5F60007000A0001 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		008PRODUCTS /* Products */ = {
+		A1B2C3D4E5F60007000A0001 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				001APP /* ROKQuizBot.app */,
+				A1B2C3D4E5F60003000A0001 /* ROKQuizBot.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -70,75 +54,75 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		004TARGET /* ROKQuizBot */ = {
+		A1B2C3D4E5F60008000A0001 /* ROKQuizBot */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 009CONFIGLIST /* Build configuration list for PBXNativeTarget "ROKQuizBot" */;
+			buildConfigurationList = A1B2C3D4E5F60009000A0001 /* Build configuration list for PBXNativeTarget "ROKQuizBot" */;
 			buildPhases = (
-				010SOURCES /* Sources */,
-				006FRAMEWORKS /* Frameworks */,
-				011RESOURCES /* Resources */,
+				A1B2C3D4E5F6000A000A0001 /* Sources */,
+				A1B2C3D4E5F60005000A0001 /* Frameworks */,
+				A1B2C3D4E5F6000B000A0001 /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				005ROOT /* ROKQuizBot */,
+				A1B2C3D4E5F60004000A0001 /* ROKQuizBot */,
 			);
 			name = ROKQuizBot;
 			packageProductDependencies = (
 			);
 			productName = ROKQuizBot;
-			productReference = 001APP /* ROKQuizBot.app */;
+			productReference = A1B2C3D4E5F60003000A0001 /* ROKQuizBot.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		012PROJECT /* Project object */ = {
+		A1B2C3D4E5F6000C000A0001 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1620;
 				LastUpgradeCheck = 1620;
 				TargetAttributes = {
-					004TARGET = {
+					A1B2C3D4E5F60008000A0001 = {
 						CreatedOnToolsVersion = 16.2;
 					};
 				};
 			};
-			buildConfigurationList = 013PROJCONFIGLIST /* Build configuration list for PBXProject "ROKQuizBot" */;
+			buildConfigurationList = A1B2C3D4E5F6000D000A0001 /* Build configuration list for PBXProject "ROKQuizBot" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
 				Base,
 			);
-			mainGroup = 007MAINGROUP;
+			mainGroup = A1B2C3D4E5F60006000A0001;
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
-			productRefGroup = 008PRODUCTS /* Products */;
+			productRefGroup = A1B2C3D4E5F60007000A0001 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				004TARGET /* ROKQuizBot */,
+				A1B2C3D4E5F60008000A0001 /* ROKQuizBot */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		011RESOURCES /* Resources */ = {
+		A1B2C3D4E5F6000B000A0001 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				001QUESTIONS /* questions.json in Resources */,
+				A1B2C3D4E5F60001000A0001 /* questions.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		010SOURCES /* Sources */ = {
+		A1B2C3D4E5F6000A000A0001 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -148,7 +132,7 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		014DEBUG /* Debug */ = {
+		A1B2C3D4E5F6000E000A0001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -212,7 +196,7 @@
 			};
 			name = Debug;
 		};
-		015RELEASE /* Release */ = {
+		A1B2C3D4E5F6000F000A0001 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -268,7 +252,7 @@
 			};
 			name = Release;
 		};
-		016TARGETDEBUG /* Debug */ = {
+		A1B2C3D4E5F60010000A0001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -295,7 +279,7 @@
 			};
 			name = Debug;
 		};
-		017TARGETRELEASE /* Release */ = {
+		A1B2C3D4E5F60011000A0001 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -325,25 +309,25 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		009CONFIGLIST /* Build configuration list for PBXNativeTarget "ROKQuizBot" */ = {
+		A1B2C3D4E5F60009000A0001 /* Build configuration list for PBXNativeTarget "ROKQuizBot" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				016TARGETDEBUG /* Debug */,
-				017TARGETRELEASE /* Release */,
+				A1B2C3D4E5F60010000A0001 /* Debug */,
+				A1B2C3D4E5F60011000A0001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		013PROJCONFIGLIST /* Build configuration list for PBXProject "ROKQuizBot" */ = {
+		A1B2C3D4E5F6000D000A0001 /* Build configuration list for PBXProject "ROKQuizBot" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				014DEBUG /* Debug */,
-				015RELEASE /* Release */,
+				A1B2C3D4E5F6000E000A0001 /* Debug */,
+				A1B2C3D4E5F6000F000A0001 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
 	};
-	rootObject = 012PROJECT /* Project object */;
+	rootObject = A1B2C3D4E5F6000C000A0001 /* Project object */;
 }
