@@ -7,6 +7,7 @@ import SwiftUI
 import AppKit
 import Combine
 
+@MainActor
 @Observable
 final class AppModel {
     // MARK: - Published State
@@ -36,7 +37,7 @@ final class AppModel {
 
     // Timer
     private var timer: AnyCancellable?
-    private var globalEventMonitor: Any?
+    private nonisolated(unsafe) var globalEventMonitor: Any?
 
     // MARK: - Init
     init() {

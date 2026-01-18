@@ -6,6 +6,7 @@ import Foundation
 import Vision
 import AppKit
 
+@MainActor
 final class OCRService {
     /// Recognises text in the given image using Vision framework.
     /// - Parameter image: The CGImage to process.

@@ -3,6 +3,7 @@
 // Made by mpcode
 
 import SwiftUI
+import ScreenCaptureKit
 
 @main
 struct ROKQuizBotApp: App {
@@ -43,7 +44,9 @@ struct ROKQuizBotApp: App {
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Request screen recording permission on launch
-        checkScreenRecordingPermission()
+        Task {
+            await checkScreenRecordingPermission()
+        }
         // Request accessibility permission for mouse control
         checkAccessibilityPermission()
     }
@@ -52,18 +55,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
-    private func checkScreenRecordingPermission() {
-        // Trigger the permission dialog by attempting to capture
-        let _ = CGWindowListCreateImage(
-            CGRect(x: 0, y: 0, width: 1, height: 1),
-            .optionOnScreenOnly,
-            kCGNullWindowID,
-            .bestResolution
-        )
+    private func checkScreenRecordingPermission() async {
+        // Trigger the permission dialog by attempting to get shareable content
+        do {
+            _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        } catch {
+            print("Screen recording permission needed: \(error)")
+        }
     }
 
-    private func checkAccessibilityPermission() {
-        let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true]
-        AXIsProcessTrustedWithOptions(options as CFDictionary)
+    private nonisolated func checkAccessibilityPermission() {
+        let key = "AXTrustedCheckOptionPrompt" as CFString
+        let options: CFDictionary = [key: true] as CFDictionary
+        AXIsProcessTrustedWithOptions(options)
     }
 }

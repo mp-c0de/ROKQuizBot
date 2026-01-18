@@ -7,6 +7,7 @@ import ScreenCaptureKit
 import CoreVideo
 import CoreImage
 
+@MainActor
 final class ScreenCaptureService {
     /// Captures a portion of the main display as a CGImage using ScreenCaptureKit.
     /// - Parameter rect: The rectangle in screen coordinates to capture.
@@ -27,63 +28,22 @@ final class ScreenCaptureService {
         // Create content filter
         let filter = SCContentFilter(display: mainDisplay, excludingWindows: [])
 
-        // Create the stream
-        let stream = SCStream(filter: filter, configuration: config, delegate: nil)
+        // Use the screenshot API for single frame capture
+        let cgImage = try await SCScreenshotManager.captureImage(
+            contentFilter: filter,
+            configuration: config
+        )
 
-        // Create a frame handler
-        let frameHandler = StreamFrameHandler(rect: rect)
+        // Crop to the requested rect
+        // The rect is in screen coordinates, need to adjust for the image
+        let scale = CGFloat(mainDisplay.width) / mainDisplay.frame.width
+        let scaledRect = CGRect(
+            x: rect.origin.x * scale,
+            y: rect.origin.y * scale,
+            width: rect.width * scale,
+            height: rect.height * scale
+        )
 
-        // Start the stream
-        try await stream.startCapture()
-        defer { stream.stopCapture() }
-
-        // Wait for a frame
-        guard let cgImage = await frameHandler.nextImage(from: stream) else {
-            return nil
-        }
-
-        return cgImage
-    }
-}
-
-// MARK: - Stream Frame Handler
-private final class StreamFrameHandler: NSObject, SCStreamOutput, @unchecked Sendable {
-    let rect: CGRect
-    private var continuation: CheckedContinuation<CGImage?, Never>?
-    private let queue = DispatchQueue(label: "ROKQuizBot.StreamFrameHandler.queue")
-
-    init(rect: CGRect) {
-        self.rect = rect
-    }
-
-    func nextImage(from stream: SCStream) async -> CGImage? {
-        await withCheckedContinuation { continuation in
-            queue.async {
-                self.continuation = continuation
-            }
-            Task { @MainActor in
-                try? stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: .main)
-            }
-        }
-    }
-
-    @objc func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard let imageBuffer = sampleBuffer.imageBuffer else {
-            queue.async {
-                self.continuation?.resume(returning: nil)
-                self.continuation = nil
-            }
-            return
-        }
-
-        // Crop and convert the buffer to CGImage
-        let ciImage = CIImage(cvPixelBuffer: imageBuffer).cropped(to: rect)
-        let context = CIContext()
-        let cgImage = context.createCGImage(ciImage, from: ciImage.extent)
-
-        queue.async {
-            self.continuation?.resume(returning: cgImage)
-            self.continuation = nil
-        }
+        return cgImage.cropping(to: scaledRect)
     }
 }

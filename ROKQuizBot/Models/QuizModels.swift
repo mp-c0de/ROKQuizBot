@@ -20,7 +20,7 @@ struct QuestionAnswer: Codable, Identifiable, Hashable {
 }
 
 // MARK: - Unknown Question (needs user to select correct answer)
-struct UnknownQuestion: Codable, Identifiable {
+struct UnknownQuestion: Codable, Identifiable, Hashable {
     let id: UUID
     let questionText: String
     let detectedOptions: [String]
@@ -33,6 +33,14 @@ struct UnknownQuestion: Codable, Identifiable {
         self.detectedOptions = detectedOptions
         self.timestamp = Date()
         self.selectedAnswer = nil
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+
+    static func == (lhs: UnknownQuestion, rhs: UnknownQuestion) -> Bool {
+        lhs.id == rhs.id
     }
 }
 

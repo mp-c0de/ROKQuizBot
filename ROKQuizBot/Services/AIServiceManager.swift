@@ -128,6 +128,7 @@ struct Usage: Codable {
 }
 
 // MARK: - AI Service Manager
+@MainActor
 @Observable
 final class AIServiceManager {
     static let shared = AIServiceManager()
