@@ -44,3 +44,6 @@ Podfile.lock
 .build/
 .swiftpm/
 Package.resolved
+
+# Claude Code
+CLAUDE.md

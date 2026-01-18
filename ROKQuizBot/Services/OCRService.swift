@@ -46,10 +46,11 @@ final class OCRService {
                 continuation.resume(returning: OCRResult(fullText: fullText, textBlocks: textBlocks))
             }
 
-            // Configure recognition
-            request.recognitionLevel = .accurate
+            // Configure recognition - use fast mode for better performance
+            // Game UI text is well-formatted so fast mode is sufficient
+            request.recognitionLevel = .fast
             request.recognitionLanguages = ["en-GB", "en-US"]
-            request.usesLanguageCorrection = true
+            request.usesLanguageCorrection = false  // Faster without language correction
 
             let handler = VNImageRequestHandler(cgImage: image, options: [:])
 

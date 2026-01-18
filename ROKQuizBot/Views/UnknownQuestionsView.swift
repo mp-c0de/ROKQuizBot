@@ -13,136 +13,216 @@ struct UnknownQuestionsView: View {
     @State private var aiError: String?
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                // Header
-                HStack {
-                    Text("Unknown Questions")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                    Spacer()
-                    Button("Done") {
-                        dismiss()
-                    }
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text("Unknown Questions")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                Spacer()
+                Button("Done") {
+                    dismiss()
                 }
-                .padding()
+            }
+            .padding()
 
-                Divider()
+            Divider()
 
-                if appModel.getUnknownQuestions().isEmpty {
-                    ContentUnavailableView(
-                        "No Unknown Questions",
-                        systemImage: "checkmark.circle",
-                        description: Text("All questions have been answered or resolved.")
-                    )
-                } else {
-                    // Question list
+            if appModel.getUnknownQuestions().isEmpty {
+                ContentUnavailableView(
+                    "No Unknown Questions",
+                    systemImage: "checkmark.circle",
+                    description: Text("All questions have been answered or resolved.")
+                )
+            } else {
+                // Side by side layout: list on left, answer panel on right
+                HSplitView {
+                    // Question list on left
                     List(appModel.getUnknownQuestions(), selection: $selectedQuestion) { question in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(question.questionText)
-                                .font(.headline)
-                                .lineLimit(2)
+                        let parsed = ParsedQuizQuestion.parse(from: question.questionText)
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(parsed.cleanQuestion)
+                                    .font(.headline)
+                                    .lineLimit(3)
 
-                            HStack {
-                                Text(question.timestamp, style: .relative)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-
-                                if !question.detectedOptions.isEmpty {
-                                    Text("• \(question.detectedOptions.count) options detected")
+                                if parsed.isValid {
+                                    Text("4 options detected")
                                         .font(.caption)
-                                        .foregroundColor(.secondary)
+                                        .foregroundColor(.green)
+                                } else {
+                                    Text(parsed.parsingError ?? "Parsing issue")
+                                        .font(.caption)
+                                        .foregroundColor(.orange)
+                                        .lineLimit(1)
                                 }
+                            }
+
+                            Spacer()
+
+                            if !parsed.isValid {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.orange)
                             }
                         }
                         .padding(.vertical, 4)
                         .tag(question)
                     }
-                }
+                    .frame(minWidth: 280, idealWidth: 320)
 
-                // Answer panel
-                if let question = selectedQuestion {
-                    Divider()
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Selected Question")
-                            .font(.headline)
-
-                        Text(question.questionText)
-                            .font(.body)
-                            .padding()
-                            .background(Color.gray.opacity(0.1))
-                            .cornerRadius(8)
-
-                        if !question.detectedOptions.isEmpty {
-                            Text("Detected Options:")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-
-                            ForEach(question.detectedOptions, id: \.self) { option in
-                                Button(action: {
-                                    answerText = option
-                                }) {
-                                    HStack {
-                                        Text(option)
-                                        Spacer()
-                                        if answerText == option {
-                                            Image(systemName: "checkmark")
-                                        }
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(answerText == option ? Color.accentColor.opacity(0.2) : Color.clear)
-                                .cornerRadius(4)
-                            }
+                    // Answer panel on right
+                    if let question = selectedQuestion {
+                        ScrollView {
+                            answerPanelView(for: question)
                         }
-
-                        HStack {
-                            TextField("Enter correct answer...", text: $answerText)
-                                .textFieldStyle(.roundedBorder)
-
-                            Button("Ask AI") {
-                                Task { await askAIForAnswer() }
-                            }
-                            .disabled(!AIServiceManager.shared.isConfigured || isAskingAI)
-                        }
-
-                        if let error = aiError {
-                            Text(error)
-                                .font(.caption)
-                                .foregroundColor(.red)
-                        }
-
-                        HStack {
-                            Button("Delete Question") {
-                                if let q = selectedQuestion {
-                                    appModel.deleteUnknownQuestion(q)
-                                    selectedQuestion = nil
-                                    answerText = ""
-                                }
-                            }
-                            .foregroundColor(.red)
-
+                        .frame(minWidth: 400)
+                    } else {
+                        VStack {
                             Spacer()
-
-                            Button("Save Answer") {
-                                if let q = selectedQuestion, !answerText.isEmpty {
-                                    appModel.resolveUnknownQuestion(q, with: answerText)
-                                    selectedQuestion = nil
-                                    answerText = ""
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(answerText.isEmpty)
+                            Text("Select a question to answer")
+                                .foregroundColor(.secondary)
+                            Spacer()
                         }
+                        .frame(minWidth: 400)
                     }
-                    .padding()
-                    .background(Color(nsColor: .windowBackgroundColor))
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func answerPanelView(for question: UnknownQuestion) -> some View {
+        let parsed = ParsedQuizQuestion.parse(from: question.questionText)
+
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Selected Question")
+                .font(.headline)
+
+            // Clean question text
+            Text(parsed.cleanQuestion)
+                .font(.body)
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.blue.opacity(0.1))
+                .cornerRadius(8)
+
+            // Show parsing error if options weren't found correctly
+            if let error = parsed.parsingError {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text(error)
+                        .font(.callout)
+                        .foregroundColor(.orange)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.1))
+                .cornerRadius(8)
+
+                // Show raw OCR text for debugging
+                DisclosureGroup("Raw OCR Text (for debugging)") {
+                    Text(parsed.rawText)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.gray.opacity(0.1))
+                        .cornerRadius(4)
+                        .textSelection(.enabled)
+                }
+                .font(.caption)
+            }
+
+            // Parsed options - display in a grid for better visibility
+            if !parsed.options.isEmpty {
+                Text(parsed.isValid ? "Select the correct answer:" : "Partially parsed options (may be incorrect):")
+                    .font(.subheadline)
+                    .foregroundColor(parsed.isValid ? .secondary : .orange)
+
+                // Use 2-column grid for options
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                    ForEach(parsed.options) { option in
+                        Button(action: {
+                            answerText = option.text
+                        }) {
+                            HStack {
+                                Text(option.letter)
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                    .frame(width: 28, height: 28)
+                                    .background(answerText == option.text ? Color.green : Color.gray)
+                                    .clipShape(Circle())
+
+                                Text(option.text)
+                                    .foregroundColor(.primary)
+                                    .lineLimit(2)
+                                    .minimumScaleFactor(0.8)
+
+                                Spacer()
+
+                                if answerText == option.text {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.green)
+                                }
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 10)
+                            .background(answerText == option.text ? Color.green.opacity(0.15) : Color.gray.opacity(0.1))
+                            .cornerRadius(8)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            // Manual answer entry
+            HStack {
+                TextField("Or enter answer manually...", text: $answerText)
+                    .textFieldStyle(.roundedBorder)
+
+                Button("Ask AI") {
+                    Task { await askAIForAnswer() }
+                }
+                .disabled(!AIServiceManager.shared.isConfigured || isAskingAI)
+            }
+
+            if let error = aiError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+
+            HStack {
+                Button("Delete Question") {
+                    appModel.deleteUnknownQuestion(question)
+                    selectedQuestion = nil
+                    answerText = ""
+                }
+                .foregroundColor(.red)
+
+                Spacer()
+
+                if !answerText.isEmpty {
+                    Text("Will save: \(answerText)")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                }
+
+                Spacer()
+
+                Button("Save Answer") {
+                    // Save with clean question text, not raw OCR
+                    appModel.resolveUnknownQuestion(question, withCleanQuestion: parsed.cleanQuestion, answer: answerText)
+                    selectedQuestion = nil
+                    answerText = ""
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(answerText.isEmpty)
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func askAIForAnswer() async {
@@ -172,5 +252,5 @@ struct UnknownQuestionsView: View {
 
 #Preview {
     UnknownQuestionsView(appModel: AppModel())
-        .frame(width: 600, height: 500)
+        .frame(width: 900, height: 700)
 }

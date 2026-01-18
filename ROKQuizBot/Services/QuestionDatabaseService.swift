@@ -1,84 +1,68 @@
 // QuestionDatabaseService.swift
-// Service for managing the question/answer database
+// Service for managing the question/answer database with fast O(1) lookup
 // Made by mpcode
 
 import Foundation
 
 final class QuestionDatabaseService {
     // MARK: - Properties
-    private(set) var questions: [QuestionAnswer] = []
+
+    /// User-added questions (stored in JSON, separate from built-in)
+    private var userQuestions: [String: String] = [:]  // normalized question -> answer
+
+    /// Unknown questions pending answers
     private(set) var unknownQuestions: [UnknownQuestion] = []
 
-    private let questionsFileURL: URL
+    private let userQuestionsFileURL: URL
     private let unknownQuestionsFileURL: URL
+
+    /// Total question count (built-in + user-added)
+    var totalQuestionCount: Int {
+        return BuiltInQuestions.count + userQuestions.count
+    }
 
     // MARK: - Init
     init() {
-        // Get documents directory
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         let appFolder = documentsPath.appendingPathComponent("ROKQuizBot", isDirectory: true)
-
-        // Create app folder if needed
         try? FileManager.default.createDirectory(at: appFolder, withIntermediateDirectories: true)
 
-        questionsFileURL = appFolder.appendingPathComponent("questions.json")
+        userQuestionsFileURL = appFolder.appendingPathComponent("user_questions.json")
         unknownQuestionsFileURL = appFolder.appendingPathComponent("unknown_questions.json")
 
-        loadQuestions()
+        loadUserQuestions()
         loadUnknownQuestions()
+
+        print("[QuestionDB] Loaded \(BuiltInQuestions.count) built-in + \(userQuestions.count) user questions = \(totalQuestionCount) total")
     }
 
-    // MARK: - Load Questions
-    private func loadQuestions() {
-        // First try to load from documents directory
-        if FileManager.default.fileExists(atPath: questionsFileURL.path) {
-            do {
-                let data = try Data(contentsOf: questionsFileURL)
-                questions = try JSONDecoder().decode([QuestionAnswer].self, from: data)
-                print("Loaded \(questions.count) questions from documents")
-                return
-            } catch {
-                print("Error loading questions from documents: \(error)")
-            }
+    // MARK: - Load/Save User Questions
+    private func loadUserQuestions() {
+        guard FileManager.default.fileExists(atPath: userQuestionsFileURL.path) else { return }
+        do {
+            let data = try Data(contentsOf: userQuestionsFileURL)
+            userQuestions = try JSONDecoder().decode([String: String].self, from: data)
+        } catch {
+            print("[QuestionDB] Error loading user questions: \(error)")
         }
+    }
 
-        // Fall back to bundle
-        if let bundlePath = Bundle.main.path(forResource: "questions", ofType: "json") {
-            do {
-                let data = try Data(contentsOf: URL(fileURLWithPath: bundlePath))
-                questions = try JSONDecoder().decode([QuestionAnswer].self, from: data)
-                print("Loaded \(questions.count) questions from bundle")
-                // Copy to documents for future updates
-                saveQuestions()
-                return
-            } catch {
-                print("Error loading questions from bundle: \(error)")
-            }
+    private func saveUserQuestions() {
+        do {
+            let data = try JSONEncoder().encode(userQuestions)
+            try data.write(to: userQuestionsFileURL)
+        } catch {
+            print("[QuestionDB] Error saving user questions: \(error)")
         }
-
-        print("No questions file found")
     }
 
     private func loadUnknownQuestions() {
-        guard FileManager.default.fileExists(atPath: unknownQuestionsFileURL.path) else {
-            return
-        }
-
+        guard FileManager.default.fileExists(atPath: unknownQuestionsFileURL.path) else { return }
         do {
             let data = try Data(contentsOf: unknownQuestionsFileURL)
             unknownQuestions = try JSONDecoder().decode([UnknownQuestion].self, from: data)
         } catch {
-            print("Error loading unknown questions: \(error)")
-        }
-    }
-
-    // MARK: - Save
-    func saveQuestions() {
-        do {
-            let data = try JSONEncoder().encode(questions)
-            try data.write(to: questionsFileURL)
-        } catch {
-            print("Error saving questions: \(error)")
+            print("[QuestionDB] Error loading unknown questions: \(error)")
         }
     }
 
@@ -87,77 +71,136 @@ final class QuestionDatabaseService {
             let data = try JSONEncoder().encode(unknownQuestions)
             try data.write(to: unknownQuestionsFileURL)
         } catch {
-            print("Error saving unknown questions: \(error)")
+            print("[QuestionDB] Error saving unknown questions: \(error)")
         }
     }
 
-    // MARK: - Find Best Match
+    // MARK: - Fast Lookup (O(1) for exact match)
+
+    /// Primary lookup method - tries fast exact match first, then fuzzy matching
     func findBestMatch(for text: String) -> MatchResult? {
-        let textLower = text.lowercased()
-        var bestMatch: (question: QuestionAnswer, confidence: Double, matchedText: String)?
+        // Parse OCR text to extract clean question
+        let parsed = ParsedQuizQuestion.parse(from: text)
+        let cleanQuestion = parsed.cleanQuestion
+        let normalized = cleanQuestion.lowercased().trimmingCharacters(in: .whitespaces)
 
-        for question in questions {
-            let questionLower = question.text.lowercased()
+        // Skip if too short
+        guard normalized.count > 10 else { return nil }
 
-            // Check if the OCR text contains this question
-            if textLower.contains(questionLower) {
-                let confidence = 1.0
-                if bestMatch == nil || confidence > bestMatch!.confidence {
-                    bestMatch = (question, confidence, question.text)
-                }
-                continue
+        // 1. FAST PATH: O(1) exact match in built-in questions
+        if let answer = BuiltInQuestions.getAnswer(for: normalized) {
+            return MatchResult(
+                question: QuestionAnswer(text: cleanQuestion, answer: answer),
+                confidence: 1.0,
+                matchedText: cleanQuestion
+            )
+        }
+
+        // 2. FAST PATH: O(1) exact match in user questions
+        if let answer = userQuestions[normalized] {
+            return MatchResult(
+                question: QuestionAnswer(text: cleanQuestion, answer: answer),
+                confidence: 1.0,
+                matchedText: cleanQuestion
+            )
+        }
+
+        // 3. FAST PATH: Check if OCR text contains a known question (substring match)
+        if let result = findSubstringMatch(in: normalized) {
+            return result
+        }
+
+        // 4. SLOW PATH: Fuzzy matching (only if exact match fails)
+        return findFuzzyMatch(for: normalized, originalQuestion: cleanQuestion)
+    }
+
+    /// Fast substring matching - checks if the OCR text contains any known question
+    private func findSubstringMatch(in normalizedText: String) -> MatchResult? {
+        // Check built-in questions
+        for (question, answer) in BuiltInQuestions.dictionary {
+            if normalizedText.contains(question) || question.contains(normalizedText) {
+                return MatchResult(
+                    question: QuestionAnswer(text: question, answer: answer),
+                    confidence: 0.95,
+                    matchedText: question
+                )
             }
+        }
 
-            // Check fuzzy match
-            let similarity = stringSimilarity(questionLower, textLower)
-            if similarity > 0.7 {
+        // Check user questions
+        for (question, answer) in userQuestions {
+            if normalizedText.contains(question) || question.contains(normalizedText) {
+                return MatchResult(
+                    question: QuestionAnswer(text: question, answer: answer),
+                    confidence: 0.95,
+                    matchedText: question
+                )
+            }
+        }
+
+        return nil
+    }
+
+    /// Fuzzy matching fallback using Levenshtein distance
+    private func findFuzzyMatch(for normalized: String, originalQuestion: String) -> MatchResult? {
+        var bestMatch: (question: String, answer: String, confidence: Double)?
+
+        // Check built-in questions
+        for (question, answer) in BuiltInQuestions.dictionary {
+            let similarity = stringSimilarity(question, normalized)
+            if similarity > 0.75 {
                 if bestMatch == nil || similarity > bestMatch!.confidence {
-                    bestMatch = (question, similarity, question.text)
-                }
-                continue
-            }
-
-            // Check if question keywords are present
-            let keywords = extractKeywords(from: questionLower)
-            let matchedKeywords = keywords.filter { textLower.contains($0) }
-            if matchedKeywords.count > keywords.count / 2 {
-                let keywordConfidence = Double(matchedKeywords.count) / Double(keywords.count) * 0.8
-                if bestMatch == nil || keywordConfidence > bestMatch!.confidence {
-                    bestMatch = (question, keywordConfidence, question.text)
+                    bestMatch = (question, answer, similarity)
                 }
             }
         }
 
-        guard let match = bestMatch, match.confidence >= 0.6 else {
+        // Check user questions
+        for (question, answer) in userQuestions {
+            let similarity = stringSimilarity(question, normalized)
+            if similarity > 0.75 {
+                if bestMatch == nil || similarity > bestMatch!.confidence {
+                    bestMatch = (question, answer, similarity)
+                }
+            }
+        }
+
+        guard let match = bestMatch, match.confidence >= 0.65 else {
             return nil
         }
 
         return MatchResult(
-            question: match.question,
+            question: QuestionAnswer(text: match.question, answer: match.answer),
             confidence: match.confidence,
-            matchedText: match.matchedText
+            matchedText: match.question
         )
     }
 
-    // MARK: - Add Question
+    // MARK: - Add Question (user-added only)
+
     func addQuestion(_ question: QuestionAnswer) {
-        // Check for duplicates
-        if !questions.contains(where: { $0.text.lowercased() == question.text.lowercased() }) {
-            questions.append(question)
-            saveQuestions()
-        }
+        let normalized = question.text.lowercased().trimmingCharacters(in: .whitespaces)
+
+        // Don't add if already exists in built-in or user questions
+        if BuiltInQuestions.contains(normalized) { return }
+        if userQuestions[normalized] != nil { return }
+
+        userQuestions[normalized] = question.answer
+        saveUserQuestions()
+        print("[QuestionDB] Added user question: \(question.text.prefix(50))...")
     }
 
     // MARK: - Unknown Questions
+
     func addUnknownQuestion(questionText: String, options: [String] = []) {
-        // Don't add if already unknown or if we have an answer
-        let textLower = questionText.lowercased()
+        let normalized = questionText.lowercased().trimmingCharacters(in: .whitespaces)
 
-        if unknownQuestions.contains(where: { stringSimilarity($0.questionText.lowercased(), textLower) > 0.8 }) {
-            return
-        }
+        // Don't add if already known
+        if BuiltInQuestions.contains(normalized) { return }
+        if userQuestions[normalized] != nil { return }
 
-        if questions.contains(where: { stringSimilarity($0.text.lowercased(), textLower) > 0.8 }) {
+        // Don't add if already in unknown list (use similarity check for OCR variations)
+        if unknownQuestions.contains(where: { stringSimilarity($0.questionText.lowercased(), normalized) > 0.8 }) {
             return
         }
 
@@ -167,11 +210,15 @@ final class QuestionDatabaseService {
     }
 
     func resolveUnknownQuestion(_ unknown: UnknownQuestion, with answer: String) {
-        // Add to main database
         let newQuestion = QuestionAnswer(text: unknown.questionText, answer: answer)
         addQuestion(newQuestion)
+        unknownQuestions.removeAll { $0.id == unknown.id }
+        saveUnknownQuestions()
+    }
 
-        // Remove from unknown
+    func resolveUnknownQuestionWithCleanText(_ unknown: UnknownQuestion, cleanQuestion: String, answer: String) {
+        let newQuestion = QuestionAnswer(text: cleanQuestion, answer: answer)
+        addQuestion(newQuestion)
         unknownQuestions.removeAll { $0.id == unknown.id }
         saveUnknownQuestions()
     }
@@ -181,14 +228,25 @@ final class QuestionDatabaseService {
         saveUnknownQuestions()
     }
 
-    // MARK: - Helpers
-    private func extractKeywords(from text: String) -> [String] {
-        let stopWords = Set(["the", "a", "an", "is", "are", "was", "were", "of", "in", "to", "for", "on", "with", "at", "by", "from", "which", "what", "who", "how", "when", "where", "that", "this", "it"])
+    // MARK: - For UI (get all questions for display)
 
-        return text
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { $0.count > 2 && !stopWords.contains($0) }
+    func getAllQuestions() -> [QuestionAnswer] {
+        var all: [QuestionAnswer] = []
+
+        // Add built-in questions
+        for (question, answer) in BuiltInQuestions.dictionary {
+            all.append(QuestionAnswer(text: question, answer: answer))
+        }
+
+        // Add user questions
+        for (question, answer) in userQuestions {
+            all.append(QuestionAnswer(text: question, answer: answer))
+        }
+
+        return all.sorted { $0.text < $1.text }
     }
+
+    // MARK: - Helpers
 
     private func stringSimilarity(_ s1: String, _ s2: String) -> Double {
         let len1 = s1.count
@@ -197,13 +255,14 @@ final class QuestionDatabaseService {
         if len1 == 0 && len2 == 0 { return 1.0 }
         if len1 == 0 || len2 == 0 { return 0.0 }
 
-        // For very different lengths, check if one contains the other
+        // Quick check for containment
         if len1 > len2 * 2 {
             if s1.contains(s2) { return 0.85 }
         } else if len2 > len1 * 2 {
             if s2.contains(s1) { return 0.85 }
         }
 
+        // Levenshtein distance
         let s1Array = Array(s1)
         let s2Array = Array(s2)
 

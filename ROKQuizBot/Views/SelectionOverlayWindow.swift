@@ -15,6 +15,8 @@ final class SelectionOverlayWindow: NSWindow, NSWindowDelegate {
         let window = SelectionOverlayWindow(screen: screen, completion: completion)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        // Make the overlay view first responder AFTER window is shown (for ESC key)
+        window.makeFirstResponder(window.overlayView)
     }
 
     convenience init(screen: NSScreen, completion: @escaping (CGRect?) -> Void) {
@@ -40,6 +42,10 @@ final class SelectionOverlayWindow: NSWindow, NSWindowDelegate {
         }
     }
 
+    // Borderless windows need this to become key and receive keyboard events
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
     func windowDidResignKey(_ notification: Notification) {
         overlayView.cancelSelection()
     }
@@ -49,6 +55,7 @@ final class SelectionOverlayView: NSView {
     var onFinish: ((CGRect?) -> Void)?
     private var startPoint: CGPoint?
     private var currentPoint: CGPoint?
+    private var didFinish = false  // Prevent double-calling onFinish
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -78,11 +85,13 @@ final class SelectionOverlayView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        guard !didFinish else { return }
+
         currentPoint = convert(event.locationInWindow, from: nil)
         needsDisplay = true
 
         guard let start = startPoint, let end = currentPoint else {
-            onFinish?(nil)
+            finishSelection(with: nil)
             return
         }
 
@@ -94,9 +103,15 @@ final class SelectionOverlayView: NSView {
             height: abs(end.y - start.y)
         )
 
+        // Minimum size check - prevent accidental tiny selections
+        guard rectAppKit.width > 10 && rectAppKit.height > 10 else {
+            finishSelection(with: nil)
+            return
+        }
+
         // Convert to Quartz/CG coordinates (origin top-left)
         guard let screen = self.window?.screen else {
-            onFinish?(rectAppKit)
+            finishSelection(with: rectAppKit)
             return
         }
 
@@ -108,7 +123,13 @@ final class SelectionOverlayView: NSView {
             height: rectAppKit.height
         )
 
-        onFinish?(cgRect)
+        finishSelection(with: cgRect)
+    }
+
+    private func finishSelection(with rect: CGRect?) {
+        guard !didFinish else { return }
+        didFinish = true
+        onFinish?(rect)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -162,6 +183,6 @@ final class SelectionOverlayView: NSView {
     }
 
     func cancelSelection() {
-        onFinish?(nil)
+        finishSelection(with: nil)
     }
 }

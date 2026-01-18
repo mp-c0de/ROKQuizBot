@@ -22,8 +22,7 @@ final class AppModel {
     var unknownCount: Int = 0
 
     // Settings
-    var captureInterval: Double = 2.0 // Seconds between captures
-    var clickDelay: Double = 0.3 // Delay before clicking
+    var clickDelay: Double = 0.1 // Delay before clicking (reduced for faster response)
     var hideCursorDuringCapture: Bool = true
     var soundEnabled: Bool = true
     var autoAddUnknown: Bool = true
@@ -35,9 +34,11 @@ final class AppModel {
     private let mouseController: MouseController
     private let aiService: AIServiceManager
 
-    // Timer
-    private var timer: AnyCancellable?
+    // Hotkey monitors
     private var globalEventMonitor: Any?
+    private var localEventMonitor: Any?
+    private var isProcessingCapture = false  // Prevent double-triggering
+    private var isAutoAnswering = false  // Toggle for continuous auto-answer loop
 
     // MARK: - Init
     init() {
@@ -56,12 +57,15 @@ final class AppModel {
             if let monitor = globalEventMonitor {
                 NSEvent.removeMonitor(monitor)
             }
+            if let monitor = localEventMonitor {
+                NSEvent.removeMonitor(monitor)
+            }
         }
     }
 
     // MARK: - Load Questions
     func loadQuestions() {
-        questionsLoaded = questionDatabase.questions.count
+        questionsLoaded = questionDatabase.totalQuestionCount
         unknownCount = questionDatabase.unknownQuestions.count
     }
 
@@ -99,33 +103,53 @@ final class AppModel {
         status = .running
         answeredCount = 0
 
-        timer = Timer.publish(every: captureInterval, on: .main, in: .common)
-            .autoconnect()
-            .sink { [weak self] _ in
-                Task { await self?.processCapture() }
+        // Start the screen capture stream once (keeps it ready for instant captures)
+        Task {
+            do {
+                try await screenCapture.startStream()
+                print("[AppModel] Stream ready - press Command+Space to capture and answer")
+            } catch {
+                print("Failed to start capture stream: \(error)")
+                status = .error("Failed to start screen capture")
             }
-
-        // Trigger immediate capture
-        Task { await processCapture() }
-    }
-
-    func stopMonitoring() {
-        timer?.cancel()
-        timer = nil
-        status = .idle
-    }
-
-    func pauseMonitoring() {
-        if status.isRunning {
-            timer?.cancel()
-            timer = nil
-            status = .paused
         }
     }
 
-    func resumeMonitoring() {
-        if case .paused = status {
-            startMonitoring()
+    func stopMonitoring() {
+        status = .idle
+
+        // Stop the screen capture stream
+        Task {
+            await screenCapture.stopStream()
+        }
+    }
+
+    /// One-shot capture and answer (called by hotkey ⌘⌃0)
+    /// Captures screen, finds answer, clicks it, done.
+    func captureAndAnswer() {
+        guard selectedCaptureRect != nil else {
+            status = .error("Please select a capture area first")
+            return
+        }
+        guard !isProcessingCapture else { return }
+
+        Task {
+            status = .running
+
+            // Start stream if needed
+            do {
+                try await screenCapture.startStream()
+            } catch {
+                status = .error("Failed to start screen capture")
+                return
+            }
+
+            // Process capture
+            await processCapture()
+
+            // Stop stream and reset status
+            await screenCapture.stopStream()
+            status = .idle
         }
     }
 
@@ -133,6 +157,9 @@ final class AppModel {
     @MainActor
     private func processCapture() async {
         guard let rect = selectedCaptureRect else { return }
+
+        isProcessingCapture = true
+        defer { isProcessingCapture = false }
 
         // Hide cursor if enabled
         if hideCursorDuringCapture {
@@ -206,15 +233,92 @@ final class AppModel {
     ) -> AnswerLocation? {
         let answerLower = answer.lowercased()
 
+        // Pass 1: Look for EXACT match (block text equals or nearly equals the answer)
+        for block in ocrResult.textBlocks {
+            let blockLower = block.text.lowercased().trimmingCharacters(in: .whitespaces)
+
+            // Check for exact match
+            if blockLower == answerLower || stringSimilarity(blockLower, answerLower) > 0.9 {
+                let screenX = captureRect.origin.x + (block.boundingBox.midX * captureRect.width)
+                let screenY = captureRect.origin.y + ((1 - block.boundingBox.midY) * captureRect.height)
+
+                return AnswerLocation(
+                    answerText: block.text,
+                    screenRect: CGRect(
+                        x: captureRect.origin.x + (block.boundingBox.origin.x * captureRect.width),
+                        y: captureRect.origin.y + ((1 - block.boundingBox.maxY) * captureRect.height),
+                        width: block.boundingBox.width * captureRect.width,
+                        height: block.boundingBox.height * captureRect.height
+                    ),
+                    clickPoint: CGPoint(x: screenX, y: screenY)
+                )
+            }
+
+            // Check for "[A-D] Answer" format (like "B Taoism")
+            let optionPattern = "^[abcd]\\s+(.+)$"
+            if let regex = try? NSRegularExpression(pattern: optionPattern, options: .caseInsensitive),
+               let match = regex.firstMatch(in: blockLower, range: NSRange(blockLower.startIndex..., in: blockLower)),
+               match.numberOfRanges > 1,
+               let optionTextRange = Range(match.range(at: 1), in: blockLower) {
+                let optionText = String(blockLower[optionTextRange])
+                if optionText == answerLower || stringSimilarity(optionText, answerLower) > 0.85 {
+                    let screenX = captureRect.origin.x + (block.boundingBox.midX * captureRect.width)
+                    let screenY = captureRect.origin.y + ((1 - block.boundingBox.midY) * captureRect.height)
+
+                    return AnswerLocation(
+                        answerText: block.text,
+                        screenRect: CGRect(
+                            x: captureRect.origin.x + (block.boundingBox.origin.x * captureRect.width),
+                            y: captureRect.origin.y + ((1 - block.boundingBox.maxY) * captureRect.height),
+                            width: block.boundingBox.width * captureRect.width,
+                            height: block.boundingBox.height * captureRect.height
+                        ),
+                        clickPoint: CGPoint(x: screenX, y: screenY)
+                    )
+                }
+            }
+        }
+
+        // Pass 2: Look for blocks containing the answer and estimate position within block
         for block in ocrResult.textBlocks {
             let blockLower = block.text.lowercased()
 
-            // Check if this block contains the answer
-            if blockLower.contains(answerLower) ||
-               answerLower.contains(blockLower) ||
-               stringSimilarity(blockLower, answerLower) > 0.8 {
+            if let range = blockLower.range(of: answerLower) {
+                // Calculate where within the block text the answer appears (0.0 to 1.0)
+                let startIndex = blockLower.distance(from: blockLower.startIndex, to: range.lowerBound)
+                let endIndex = blockLower.distance(from: blockLower.startIndex, to: range.upperBound)
+                let midIndex = (startIndex + endIndex) / 2
+                let totalLength = blockLower.count
 
-                // Convert normalised coordinates to screen coordinates
+                // Estimate horizontal position based on character position
+                let relativeX = totalLength > 0 ? Double(midIndex) / Double(totalLength) : 0.5
+
+                // Calculate adjusted X coordinate within the block's bounding box
+                let blockLeft = block.boundingBox.minX
+                let blockWidth = block.boundingBox.width
+                let adjustedX = blockLeft + (blockWidth * relativeX)
+
+                let screenX = captureRect.origin.x + (adjustedX * captureRect.width)
+                let screenY = captureRect.origin.y + ((1 - block.boundingBox.midY) * captureRect.height)
+
+                return AnswerLocation(
+                    answerText: answer,
+                    screenRect: CGRect(
+                        x: captureRect.origin.x + (block.boundingBox.origin.x * captureRect.width),
+                        y: captureRect.origin.y + ((1 - block.boundingBox.maxY) * captureRect.height),
+                        width: block.boundingBox.width * captureRect.width,
+                        height: block.boundingBox.height * captureRect.height
+                    ),
+                    clickPoint: CGPoint(x: screenX, y: screenY)
+                )
+            }
+        }
+
+        // Pass 3: Fuzzy match as fallback
+        for block in ocrResult.textBlocks {
+            let blockLower = block.text.lowercased()
+
+            if answerLower.contains(blockLower) || stringSimilarity(blockLower, answerLower) > 0.8 {
                 let screenX = captureRect.origin.x + (block.boundingBox.midX * captureRect.width)
                 let screenY = captureRect.origin.y + ((1 - block.boundingBox.midY) * captureRect.height)
 
@@ -276,16 +380,41 @@ final class AppModel {
 
     // MARK: - Global Hotkey
     private func setupGlobalHotkey() {
-        globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            // Command+Shift+Escape to stop
-            if event.keyCode == 53 &&
-               event.modifierFlags.contains(.command) &&
-               event.modifierFlags.contains(.shift) {
-                DispatchQueue.main.async {
-                    self?.emergencyStop()
-                }
+        // Check and request accessibility permission for global hotkey
+        let options = [("AXTrustedCheckOptionPrompt" as CFString): true] as CFDictionary
+        let accessibilityEnabled = AXIsProcessTrustedWithOptions(options)
+
+        if accessibilityEnabled {
+            // Global monitor for when app is not focused
+            globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                self?.handleHotkey(event)
             }
+        } else {
+            print("Accessibility permission not granted - hotkeys will only work when app is focused")
         }
+
+        // Local monitor for when app is focused (always works)
+        localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if self?.handleHotkey(event) == true {
+                return nil // Consume the event
+            }
+            return event
+        }
+    }
+
+    @discardableResult
+    private func handleHotkey(_ event: NSEvent) -> Bool {
+        // Command+Control+0 to capture and answer
+        // keyCode 29 = 0
+        if event.keyCode == 29 &&
+           event.modifierFlags.contains(.command) &&
+           event.modifierFlags.contains(.control) {
+            DispatchQueue.main.async { [weak self] in
+                self?.captureAndAnswer()
+            }
+            return true
+        }
+        return false
     }
 
     private func emergencyStop() {
@@ -298,12 +427,19 @@ final class AppModel {
     // MARK: - Manual Question Management
     func addQuestionManually(question: String, answer: String) {
         questionDatabase.addQuestion(QuestionAnswer(text: question, answer: answer))
-        questionsLoaded = questionDatabase.questions.count
+        questionsLoaded = questionDatabase.totalQuestionCount
     }
 
     func resolveUnknownQuestion(_ unknown: UnknownQuestion, with answer: String) {
         questionDatabase.resolveUnknownQuestion(unknown, with: answer)
-        questionsLoaded = questionDatabase.questions.count
+        questionsLoaded = questionDatabase.totalQuestionCount
+        unknownCount = questionDatabase.unknownQuestions.count
+    }
+
+    /// Resolves an unknown question with a clean (parsed) question text and answer
+    func resolveUnknownQuestion(_ unknown: UnknownQuestion, withCleanQuestion cleanQuestion: String, answer: String) {
+        questionDatabase.resolveUnknownQuestionWithCleanText(unknown, cleanQuestion: cleanQuestion, answer: answer)
+        questionsLoaded = questionDatabase.totalQuestionCount
         unknownCount = questionDatabase.unknownQuestions.count
     }
 
@@ -317,6 +453,6 @@ final class AppModel {
     }
 
     func getAllQuestions() -> [QuestionAnswer] {
-        return questionDatabase.questions
+        return questionDatabase.getAllQuestions()
     }
 }

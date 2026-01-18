@@ -24,7 +24,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingUnknownQuestions) {
             UnknownQuestionsView(appModel: appModel)
-                .frame(minWidth: 600, minHeight: 400)
+                .frame(width: 900, height: 700)
         }
         .sheet(isPresented: $showingQuestionDatabase) {
             QuestionDatabaseView(appModel: appModel)
@@ -55,26 +55,30 @@ struct ContentView: View {
                 }
                 .disabled(appModel.status.isRunning)
 
-                Button(action: { appModel.toggleMonitoring() }) {
+                Button(action: { appModel.captureAndAnswer() }) {
                     Label(
-                        appModel.status.isRunning ? "Stop" : "Start",
-                        systemImage: appModel.status.isRunning ? "stop.fill" : "play.fill"
+                        appModel.status.isRunning ? "Processing..." : "Capture & Answer",
+                        systemImage: appModel.status.isRunning ? "hourglass" : "sparkle.magnifyingglass"
                     )
                 }
-                .disabled(appModel.selectedCaptureRect == nil)
-                .keyboardShortcut(.space, modifiers: [])
+                .disabled(appModel.selectedCaptureRect == nil || appModel.status.isRunning)
+            }
+
+            Section("Hotkey") {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("⌘⌃0")
+                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                    Text("Command + Control + 0")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("Captures screen, finds answer, clicks it")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 4)
             }
 
             Section("Settings") {
-                HStack {
-                    Text("Interval")
-                    Spacer()
-                    TextField("", value: $appModel.captureInterval, format: .number)
-                        .frame(width: 50)
-                        .textFieldStyle(.roundedBorder)
-                    Text("sec")
-                }
-
                 Toggle("Hide Cursor During Capture", isOn: $appModel.hideCursorDuringCapture)
                 Toggle("Sound Effects", isOn: $appModel.soundEnabled)
                 Toggle("Auto-add Unknown Questions", isOn: $appModel.autoAddUnknown)
