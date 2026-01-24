@@ -27,8 +27,13 @@ final class AppModel {
     var soundEnabled: Bool = true
     var autoAddUnknown: Bool = true
 
+    // Layout configuration
+    var layoutConfiguration: QuizLayoutConfiguration? = nil
+    var isConfiguringLayout: Bool = false
+
     // Services
     private let questionDatabase: QuestionDatabaseService
+    private let layoutService: LayoutConfigurationService
     private let screenCapture: ScreenCaptureService
     private let ocrService: OCRService
     private let mouseController: MouseController
@@ -43,12 +48,14 @@ final class AppModel {
     // MARK: - Init
     init() {
         self.questionDatabase = QuestionDatabaseService()
+        self.layoutService = LayoutConfigurationService()
         self.screenCapture = ScreenCaptureService()
         self.ocrService = OCRService()
         self.mouseController = MouseController()
         self.aiService = AIServiceManager.shared
 
         loadQuestions()
+        loadLayoutConfiguration()
         setupGlobalHotkey()
     }
 
@@ -67,6 +74,112 @@ final class AppModel {
     func loadQuestions() {
         questionsLoaded = questionDatabase.totalQuestionCount
         unknownCount = questionDatabase.unknownQuestions.count
+    }
+
+    // MARK: - Layout Configuration
+    private func loadLayoutConfiguration() {
+        layoutConfiguration = layoutService.activeLayout
+    }
+
+    /// Opens the layout configuration window to set up question/answer zones
+    func beginLayoutConfiguration() {
+        guard let rect = selectedCaptureRect else {
+            status = .error("Please select a capture area first")
+            return
+        }
+
+        isConfiguringLayout = true
+
+        // Take a screenshot of the capture area
+        Task {
+            do {
+                try await screenCapture.startStream()
+                guard let cgImage = try await screenCapture.capture(rect: rect) else {
+                    await screenCapture.stopStream()
+                    isConfiguringLayout = false
+                    return
+                }
+                await screenCapture.stopStream()
+
+                let nsImage = NSImage(cgImage: cgImage, size: rect.size)
+
+                // Present the layout configuration window
+                let existingLayout = self.layoutConfiguration
+                LayoutConfigurationWindow.present(
+                    with: nsImage,
+                    captureRect: rect,
+                    existingLayout: existingLayout
+                ) { [weak self] layout in
+                    guard let self = self else { return }
+                    DispatchQueue.main.async {
+                        self.isConfiguringLayout = false
+                        if let layout = layout {
+                            self.layoutConfiguration = layout
+
+                            // Check if this is an update to an existing layout or a new one
+                            if existingLayout != nil && self.layoutService.getLayout(layout.id) != nil {
+                                self.layoutService.updateLayout(layout)
+                                print("[AppModel] Updated layout: \(layout.name)")
+                            } else {
+                                self.layoutService.addLayout(layout, setActive: true)
+                                print("[AppModel] Created new layout: \(layout.name)")
+                            }
+                        }
+                    }
+                }
+            } catch {
+                isConfiguringLayout = false
+                print("[AppModel] Failed to capture for layout config: \(error)")
+            }
+        }
+    }
+
+    /// Clears the current layout configuration
+    func clearLayoutConfiguration() {
+        layoutConfiguration = nil
+        layoutService.clearActiveLayout()
+    }
+
+    /// Returns all saved layouts
+    var savedLayouts: [QuizLayoutConfiguration] {
+        return layoutService.layouts
+    }
+
+    /// Switches to a different saved layout
+    func selectLayout(_ id: UUID) {
+        layoutService.setActiveLayout(id)
+        layoutConfiguration = layoutService.activeLayout
+        print("[AppModel] Switched to layout: \(layoutConfiguration?.name ?? "none")")
+    }
+
+    /// Deletes a saved layout
+    func deleteLayout(_ id: UUID) {
+        layoutService.deleteLayout(id)
+        if layoutConfiguration?.id == id {
+            layoutConfiguration = nil
+        }
+    }
+
+    /// Renames a layout
+    func renameLayout(_ id: UUID, to newName: String) {
+        guard var layout = layoutService.getLayout(id) else { return }
+        layout.name = newName
+        layoutService.updateLayout(layout)
+        if layoutConfiguration?.id == id {
+            layoutConfiguration = layout
+        }
+    }
+
+    /// Saves the current layout with a new name (creates a copy)
+    func saveLayoutAs(name: String) {
+        guard let current = layoutConfiguration else { return }
+        let newLayout = QuizLayoutConfiguration(
+            name: name,
+            questionZone: current.questionZone,
+            answerZones: current.answerZones
+        )
+        layoutService.addLayout(newLayout, setActive: true)
+        layoutConfiguration = layoutService.activeLayout
     }
 
     // MARK: - Area Selection
@@ -181,6 +294,106 @@ final class AppModel {
             let nsImage = NSImage(cgImage: cgImage, size: rect.size)
             lastCapture = nsImage
 
+            // Use layout-based OCR if configured, otherwise fall back to full-area OCR
+            if let layout = layoutConfiguration, layout.isValid {
+                await processWithLayout(cgImage: cgImage, layout: layout, captureRect: rect)
+            } else {
+                await processWithFullAreaOCR(cgImage: cgImage, captureRect: rect)
+            }
+
+        } catch {
+            print("Capture error: \(error)")
+        }
+    }
+
+    /// Processes capture using zone-based OCR with the configured layout
+    @MainActor
+    private func processWithLayout(cgImage: CGImage, layout: QuizLayoutConfiguration, captureRect: CGRect) async {
+        do {
+            // OCR each zone separately
+            let zoneResults = try await ocrService.recogniseZones(in: cgImage, layout: layout)
+
+            let questionText = zoneResults.question
+            let answers = zoneResults.answers
+
+            lastOCRText = "Q: \(questionText)\n" + answers.map { "\($0.key): \($0.value)" }.sorted().joined(separator: "\n")
+
+            // Try to match question
+            if let match = questionDatabase.findBestMatch(for: questionText) {
+                lastMatchedQuestion = match.question
+
+                // Find which answer zone matches the correct answer
+                if let matchingZone = findMatchingAnswerZone(
+                    correctAnswer: match.question.answer,
+                    detectedAnswers: answers,
+                    layout: layout
+                ) {
+                    // Click the centre of the matching answer zone
+                    try await Task.sleep(nanoseconds: UInt64(clickDelay * 1_000_000_000))
+
+                    let clickPoint = matchingZone.clickPoint(in: captureRect)
+                    mouseController.click(at: clickPoint)
+                    lastClickedAnswer = match.question.answer
+                    answeredCount += 1
+
+                    if soundEnabled {
+                        NSSound(named: NSSound.Name("Pop"))?.play()
+                    }
+                }
+            } else {
+                // Question not found - add to unknown
+                if autoAddUnknown && !questionText.isEmpty {
+                    let options = Array(answers.values)
+                    questionDatabase.addUnknownQuestion(
+                        questionText: questionText,
+                        options: options
+                    )
+                    unknownCount = questionDatabase.unknownQuestions.count
+                }
+                lastMatchedQuestion = nil
+                lastClickedAnswer = nil
+            }
+        } catch {
+            print("Layout OCR error: \(error)")
+        }
+    }
+
+    /// Finds the layout zone that matches the correct answer
+    private func findMatchingAnswerZone(
+        correctAnswer: String,
+        detectedAnswers: [String: String],
+        layout: QuizLayoutConfiguration
+    ) -> LayoutZone? {
+        let answerNormalised = normaliseForComparison(correctAnswer.lowercased())
+
+        // Find the best matching answer zone
+        var bestMatch: (zone: LayoutZone, score: Double)?
+
+        for zone in layout.answerZones {
+            guard let detectedText = detectedAnswers[zone.label] else { continue }
+            let detectedNormalised = normaliseForComparison(detectedText.lowercased())
+
+            // Check for exact match
+            if detectedNormalised == answerNormalised {
+                return zone
+            }
+
+            // Check similarity
+            let similarity = stringSimilarity(detectedNormalised, answerNormalised)
+            if similarity > 0.75 {
+                if bestMatch == nil || similarity > bestMatch!.score {
+                    bestMatch = (zone, similarity)
+                }
+            }
+        }
+
+        return bestMatch?.zone
+    }
+
+    /// Processes capture using full-area OCR (fallback when no layout configured)
+    @MainActor
+    private func processWithFullAreaOCR(cgImage: CGImage, captureRect: CGRect) async {
+        do {
             // Perform OCR
             let ocrResult = try await ocrService.recogniseText(in: cgImage)
             lastOCRText = ocrResult.fullText
@@ -193,7 +406,7 @@ final class AppModel {
                 if let answerLocation = findAnswerLocation(
                     answer: match.question.answer,
                     in: ocrResult,
-                    captureRect: rect
+                    captureRect: captureRect
                 ) {
                     // Click on the answer
                     try await Task.sleep(nanoseconds: UInt64(clickDelay * 1_000_000_000))
@@ -219,9 +432,8 @@ final class AppModel {
                 lastMatchedQuestion = nil
                 lastClickedAnswer = nil
             }
-
         } catch {
-            print("Capture error: \(error)")
+            print("Full-area OCR error: \(error)")
         }
     }
 
@@ -232,63 +444,77 @@ final class AppModel {
         captureRect: CGRect
     ) -> AnswerLocation? {
         let answerLower = answer.lowercased()
+        // Normalise: replace "and" with "," for matching (e.g., "USA and USSR" -> "USA, USSR")
+        let answerNormalised = normaliseForComparison(answerLower)
 
-        // Pass 1: Look for EXACT match (block text equals or nearly equals the answer)
+        // Score all blocks and find the best match
+        var bestMatch: (block: OCRResult.TextBlock, score: Double, optionText: String?)? = nil
+
         for block in ocrResult.textBlocks {
             let blockLower = block.text.lowercased().trimmingCharacters(in: .whitespaces)
+            let blockNormalised = normaliseForComparison(blockLower)
 
-            // Check for exact match
-            if blockLower == answerLower || stringSimilarity(blockLower, answerLower) > 0.9 {
-                let screenX = captureRect.origin.x + (block.boundingBox.midX * captureRect.width)
-                let screenY = captureRect.origin.y + ((1 - block.boundingBox.midY) * captureRect.height)
+            var score: Double = 0
+            var matchedOptionText: String? = nil
 
-                return AnswerLocation(
-                    answerText: block.text,
-                    screenRect: CGRect(
-                        x: captureRect.origin.x + (block.boundingBox.origin.x * captureRect.width),
-                        y: captureRect.origin.y + ((1 - block.boundingBox.maxY) * captureRect.height),
-                        width: block.boundingBox.width * captureRect.width,
-                        height: block.boundingBox.height * captureRect.height
-                    ),
-                    clickPoint: CGPoint(x: screenX, y: screenY)
-                )
+            // Check for exact match (highest priority)
+            if blockNormalised == answerNormalised {
+                score = 1.0
+            }
+            // Check for high similarity match
+            else {
+                let similarity = stringSimilarity(blockNormalised, answerNormalised)
+                if similarity > 0.85 {
+                    score = similarity
+                }
             }
 
-            // Check for "[A-D] Answer" format (like "B Taoism")
-            let optionPattern = "^[abcd]\\s+(.+)$"
-            if let regex = try? NSRegularExpression(pattern: optionPattern, options: .caseInsensitive),
-               let match = regex.firstMatch(in: blockLower, range: NSRange(blockLower.startIndex..., in: blockLower)),
-               match.numberOfRanges > 1,
-               let optionTextRange = Range(match.range(at: 1), in: blockLower) {
-                let optionText = String(blockLower[optionTextRange])
-                if optionText == answerLower || stringSimilarity(optionText, answerLower) > 0.85 {
-                    let screenX = captureRect.origin.x + (block.boundingBox.midX * captureRect.width)
-                    let screenY = captureRect.origin.y + ((1 - block.boundingBox.midY) * captureRect.height)
+            // Check for "[A-D] Answer" format (like "B USA, USSR")
+            if score < 0.85 {
+                let optionPattern = "^[abcd]\\s+(.+)$"
+                if let regex = try? NSRegularExpression(pattern: optionPattern, options: .caseInsensitive),
+                   let match = regex.firstMatch(in: blockLower, range: NSRange(blockLower.startIndex..., in: blockLower)),
+                   match.numberOfRanges > 1,
+                   let optionTextRange = Range(match.range(at: 1), in: blockLower) {
+                    let optionText = String(blockLower[optionTextRange])
+                    let optionNormalised = normaliseForComparison(optionText)
 
-                    return AnswerLocation(
-                        answerText: block.text,
-                        screenRect: CGRect(
-                            x: captureRect.origin.x + (block.boundingBox.origin.x * captureRect.width),
-                            y: captureRect.origin.y + ((1 - block.boundingBox.maxY) * captureRect.height),
-                            width: block.boundingBox.width * captureRect.width,
-                            height: block.boundingBox.height * captureRect.height
-                        ),
-                        clickPoint: CGPoint(x: screenX, y: screenY)
-                    )
+                    if optionNormalised == answerNormalised {
+                        score = 0.99  // Slightly less than exact block match
+                        matchedOptionText = optionText
+                    } else {
+                        let similarity = stringSimilarity(optionNormalised, answerNormalised)
+                        if similarity > score && similarity > 0.85 {
+                            score = similarity
+                            matchedOptionText = optionText
+                        }
+                    }
                 }
+            }
+
+            // Update best match if this is better
+            if score > 0, bestMatch == nil || score > bestMatch!.score {
+                bestMatch = (block, score, matchedOptionText)
             }
         }
 
-        // Pass 2: Look for blocks containing the answer and estimate position within block
+        // If we found a good match (score > 0.8), return it
+        if let match = bestMatch, match.score > 0.8 {
+            return createAnswerLocation(from: match.block, captureRect: captureRect)
+        }
+
+        // Pass 2: Look for blocks containing the normalised answer
         for block in ocrResult.textBlocks {
             let blockLower = block.text.lowercased()
+            let blockNormalised = normaliseForComparison(blockLower)
 
-            if let range = blockLower.range(of: answerLower) {
+            // Try to find the normalised answer within the block
+            if let range = blockNormalised.range(of: answerNormalised) {
                 // Calculate where within the block text the answer appears (0.0 to 1.0)
-                let startIndex = blockLower.distance(from: blockLower.startIndex, to: range.lowerBound)
-                let endIndex = blockLower.distance(from: blockLower.startIndex, to: range.upperBound)
+                let startIndex = blockNormalised.distance(from: blockNormalised.startIndex, to: range.lowerBound)
+                let endIndex = blockNormalised.distance(from: blockNormalised.startIndex, to: range.upperBound)
                 let midIndex = (startIndex + endIndex) / 2
-                let totalLength = blockLower.count
+                let totalLength = blockNormalised.count
 
                 // Estimate horizontal position based on character position
                 let relativeX = totalLength > 0 ? Double(midIndex) / Double(totalLength) : 0.5
@@ -314,28 +540,50 @@ final class AppModel {
             }
         }
 
-        // Pass 3: Fuzzy match as fallback
+        // Pass 3: Fuzzy match - but be careful with partial matches
+        // Only match if the block text is at least 70% of the answer length
+        // This prevents matching "USA" when looking for "USA and USSR"
         for block in ocrResult.textBlocks {
             let blockLower = block.text.lowercased()
+            let blockNormalised = normaliseForComparison(blockLower)
 
-            if answerLower.contains(blockLower) || stringSimilarity(blockLower, answerLower) > 0.8 {
-                let screenX = captureRect.origin.x + (block.boundingBox.midX * captureRect.width)
-                let screenY = captureRect.origin.y + ((1 - block.boundingBox.midY) * captureRect.height)
+            // Block must be at least 70% of answer length to be considered
+            let lengthRatio = Double(blockNormalised.count) / Double(answerNormalised.count)
+            guard lengthRatio >= 0.7 else { continue }
 
-                return AnswerLocation(
-                    answerText: block.text,
-                    screenRect: CGRect(
-                        x: captureRect.origin.x + (block.boundingBox.origin.x * captureRect.width),
-                        y: captureRect.origin.y + ((1 - block.boundingBox.maxY) * captureRect.height),
-                        width: block.boundingBox.width * captureRect.width,
-                        height: block.boundingBox.height * captureRect.height
-                    ),
-                    clickPoint: CGPoint(x: screenX, y: screenY)
-                )
+            let similarity = stringSimilarity(blockNormalised, answerNormalised)
+            if similarity > 0.75 {
+                return createAnswerLocation(from: block, captureRect: captureRect)
             }
         }
 
         return nil
+    }
+
+    /// Normalises text for comparison by replacing common variations
+    private func normaliseForComparison(_ text: String) -> String {
+        return text
+            .replacingOccurrences(of: " and ", with: ", ")
+            .replacingOccurrences(of: " & ", with: ", ")
+            .replacingOccurrences(of: "  ", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Creates an AnswerLocation from a text block
+    private func createAnswerLocation(from block: OCRResult.TextBlock, captureRect: CGRect) -> AnswerLocation {
+        let screenX = captureRect.origin.x + (block.boundingBox.midX * captureRect.width)
+        let screenY = captureRect.origin.y + ((1 - block.boundingBox.midY) * captureRect.height)
+
+        return AnswerLocation(
+            answerText: block.text,
+            screenRect: CGRect(
+                x: captureRect.origin.x + (block.boundingBox.origin.x * captureRect.width),
+                y: captureRect.origin.y + ((1 - block.boundingBox.maxY) * captureRect.height),
+                width: block.boundingBox.width * captureRect.width,
+                height: block.boundingBox.height * captureRect.height
+            ),
+            clickPoint: CGPoint(x: screenX, y: screenY)
+        )
     }
 
     // MARK: - Extract Possible Answers
