@@ -9,6 +9,7 @@ struct UnknownQuestionsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var selectedQuestion: UnknownQuestion?
     @State private var answerText: String = ""
+    @State private var editedQuestionText: String = ""  // Editable question text
     @State private var isAskingAI = false
     @State private var aiError: String?
 
@@ -98,13 +99,21 @@ struct UnknownQuestionsView: View {
             Text("Selected Question")
                 .font(.headline)
 
-            // Clean question text
-            Text(parsed.cleanQuestion)
+            // Editable question text
+            TextField("Question text...", text: $editedQuestionText, axis: .vertical)
                 .font(.body)
+                .textFieldStyle(.plain)
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.blue.opacity(0.1))
                 .cornerRadius(8)
+                .lineLimit(3...6)
+                .onAppear {
+                    // Initialize with parsed clean question
+                    if editedQuestionText.isEmpty {
+                        editedQuestionText = parsed.cleanQuestion
+                    }
+                }
 
             // Show parsing error if options weren't found correctly
             if let error = parsed.parsingError {
@@ -212,17 +221,28 @@ struct UnknownQuestionsView: View {
                 Spacer()
 
                 Button("Save Answer") {
-                    // Save with clean question text, not raw OCR
-                    appModel.resolveUnknownQuestion(question, withCleanQuestion: parsed.cleanQuestion, answer: answerText)
+                    // Save with edited question text (user can fix OCR errors)
+                    appModel.resolveUnknownQuestion(question, withCleanQuestion: editedQuestionText, answer: answerText)
                     selectedQuestion = nil
                     answerText = ""
+                    editedQuestionText = ""
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(answerText.isEmpty)
+                .disabled(answerText.isEmpty || editedQuestionText.isEmpty)
             }
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onChange(of: selectedQuestion) { _, newValue in
+            // Reset edited text when selection changes
+            if let newQuestion = newValue {
+                let parsed = ParsedQuizQuestion.parse(from: newQuestion.questionText)
+                editedQuestionText = parsed.cleanQuestion
+            } else {
+                editedQuestionText = ""
+            }
+            answerText = ""
+        }
     }
 
     private func askAIForAnswer() async {
