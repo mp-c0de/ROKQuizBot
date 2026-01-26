@@ -79,9 +79,8 @@ final class QuestionDatabaseService {
 
     /// Primary lookup method - tries fast exact match first, then fuzzy matching
     func findBestMatch(for text: String) -> MatchResult? {
-        // Parse OCR text to extract clean question
-        let parsed = ParsedQuizQuestion.parse(from: text)
-        let cleanQuestion = parsed.cleanQuestion
+        // Simple text cleaning - no complex parsing needed with zone-based OCR
+        let cleanQuestion = simpleCleanQuestion(text)
         let normalized = cleanQuestion.lowercased().trimmingCharacters(in: .whitespaces)
 
         // Skip if too short
@@ -174,6 +173,22 @@ final class QuestionDatabaseService {
             confidence: match.confidence,
             matchedText: match.question
         )
+    }
+
+    /// Simple question text cleaning - removes Q prefix and normalizes whitespace.
+    /// Used instead of complex ParsedQuizQuestion parsing since we now have zone-based OCR.
+    private func simpleCleanQuestion(_ text: String) -> String {
+        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Remove leading Q followed by number (e.g., "Q4 Which..." -> "Which...")
+        if let range = cleaned.range(of: #"^Q\d+\s*"#, options: .regularExpression) {
+            cleaned = String(cleaned[range.upperBound...])
+        }
+
+        // Normalize whitespace (replace multiple spaces with single space)
+        cleaned = cleaned.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+
+        return cleaned.trimmingCharacters(in: .whitespaces)
     }
 
     // MARK: - Add Question (user-added only)
