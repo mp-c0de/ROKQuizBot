@@ -652,11 +652,13 @@ final class AppModel {
 
     @discardableResult
     private func handleHotkey(_ event: NSEvent) -> Bool {
-        // Command+Control+0 to capture and answer
+        // Just 0 key to capture and answer (no modifiers required)
         // keyCode 29 = 0
-        if event.keyCode == 29 &&
-           event.modifierFlags.contains(.command) &&
-           event.modifierFlags.contains(.control) {
+        // Only trigger if no modifiers are pressed (except for Fn/NumLock)
+        let significantModifiers: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
+        let hasModifiers = !event.modifierFlags.intersection(significantModifiers).isEmpty
+
+        if event.keyCode == 29 && !hasModifiers {
             DispatchQueue.main.async { [weak self] in
                 self?.captureAndAnswer()
             }

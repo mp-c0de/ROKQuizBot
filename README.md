@@ -6,7 +6,7 @@ Made by mpcode
 
 ## Features
 
-- **Instant Hotkey Trigger**: Press `⌘⌃0` to capture, find answer, and click - all in one instant action
+- **Instant Hotkey Trigger**: Press `0` to capture, find answer, and click - all in one instant action
 - **Screen Area Selection**: Click and drag to select the screen region containing the quiz
 - **Quiz Layout Configuration**: Define precise zones for question and answer areas - supports multiple games with named layouts
 - **OCR Text Recognition**: Uses Apple's Vision framework for fast text recognition
@@ -49,7 +49,7 @@ Made by mpcode
    - Press **Enter** to save, **ESC** to cancel
    - Switch between saved layouts using the dropdown picker
 
-3. **Answer Questions**: Press `⌘⌃0` (Command + Control + 0) when you see a question - the app will instantly capture, find the answer, and click it
+3. **Answer Questions**: Press `0` when you see a question - the app will instantly capture, find the answer, and click it
 
 4. **Settings**:
    - **Hide Cursor**: Hide cursor during capture to avoid blocking text
@@ -76,7 +76,7 @@ Quiz layouts are saved to `~/Documents/ROKQuizBot/quiz_layouts.json`.
 
 | Shortcut | Action |
 |----------|--------|
-| `⌘⌃0` | Capture and answer (Command + Control + 0) |
+| `0` | Capture and answer |
 
 ### Layout Configuration Window
 

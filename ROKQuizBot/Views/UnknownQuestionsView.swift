@@ -41,13 +41,18 @@ struct UnknownQuestionsView: View {
                     // Question list on left
                     List(appModel.getUnknownQuestions(), selection: $selectedQuestion) { question in
                         let parsed = ParsedQuizQuestion.parse(from: question.questionText)
+                        let hasDirectOptions = !question.detectedOptions.isEmpty
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(parsed.cleanQuestion)
                                     .font(.headline)
                                     .lineLimit(3)
 
-                                if parsed.isValid {
+                                if hasDirectOptions {
+                                    Text("\(question.detectedOptions.count) options detected")
+                                        .font(.caption)
+                                        .foregroundColor(.green)
+                                } else if parsed.isValid {
                                     Text("4 options detected")
                                         .font(.caption)
                                         .foregroundColor(.green)
@@ -61,7 +66,7 @@ struct UnknownQuestionsView: View {
 
                             Spacer()
 
-                            if !parsed.isValid {
+                            if !hasDirectOptions && !parsed.isValid {
                                 Image(systemName: "exclamationmark.triangle.fill")
                                     .foregroundColor(.orange)
                             }
@@ -94,6 +99,7 @@ struct UnknownQuestionsView: View {
     @ViewBuilder
     private func answerPanelView(for question: UnknownQuestion) -> some View {
         let parsed = ParsedQuizQuestion.parse(from: question.questionText)
+        let hasDirectOptions = !question.detectedOptions.isEmpty
 
         VStack(alignment: .leading, spacing: 12) {
             Text("Selected Question")
@@ -115,8 +121,8 @@ struct UnknownQuestionsView: View {
                     }
                 }
 
-            // Show parsing error if options weren't found correctly
-            if let error = parsed.parsingError {
+            // Show parsing error only if no direct options available
+            if !hasDirectOptions, let error = parsed.parsingError {
                 HStack {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundColor(.orange)
@@ -143,8 +149,49 @@ struct UnknownQuestionsView: View {
                 .font(.caption)
             }
 
-            // Parsed options - display in a grid for better visibility
-            if !parsed.options.isEmpty {
+            // Use direct options from layout OCR if available, otherwise use parsed options
+            if hasDirectOptions {
+                Text("Select the correct answer:")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+
+                // Display direct options from layout OCR
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                    ForEach(Array(question.detectedOptions.enumerated()), id: \.offset) { index, optionText in
+                        let letter = ["A", "B", "C", "D", "E", "F"][safe: index] ?? "\(index + 1)"
+                        Button(action: {
+                            answerText = optionText
+                        }) {
+                            HStack {
+                                Text(letter)
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                    .frame(width: 28, height: 28)
+                                    .background(answerText == optionText ? Color.green : Color.gray)
+                                    .clipShape(Circle())
+
+                                Text(optionText)
+                                    .foregroundColor(.primary)
+                                    .lineLimit(2)
+                                    .minimumScaleFactor(0.8)
+
+                                Spacer()
+
+                                if answerText == optionText {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.green)
+                                }
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 10)
+                            .background(answerText == optionText ? Color.green.opacity(0.15) : Color.gray.opacity(0.1))
+                            .cornerRadius(8)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            } else if !parsed.options.isEmpty {
+                // Fallback to parsed options
                 Text(parsed.isValid ? "Select the correct answer:" : "Partially parsed options (may be incorrect):")
                     .font(.subheadline)
                     .foregroundColor(parsed.isValid ? .secondary : .orange)
@@ -267,6 +314,13 @@ struct UnknownQuestionsView: View {
                 isAskingAI = false
             }
         }
+    }
+}
+
+// MARK: - Safe Array Subscript
+extension Array {
+    subscript(safe index: Int) -> Element? {
+        return indices.contains(index) ? self[index] : nil
     }
 }
 

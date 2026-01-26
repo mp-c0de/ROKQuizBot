@@ -104,9 +104,9 @@ struct ContentView: View {
 
             Section("Hotkey") {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("⌘⌃0")
+                    Text("0")
                         .font(.system(size: 24, weight: .bold, design: .rounded))
-                    Text("Command + Control + 0")
+                    Text("Press 0 key (no modifiers)")
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Text("Captures screen, finds answer, clicks it")
