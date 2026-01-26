@@ -56,7 +56,31 @@ final class AppModel {
 
         loadQuestions()
         loadLayoutConfiguration()
+        loadSavedCaptureArea()
         setupGlobalHotkey()
+    }
+
+    // MARK: - Capture Area Persistence
+    private let captureAreaKey = "savedCaptureArea"
+
+    private func loadSavedCaptureArea() {
+        if let data = UserDefaults.standard.data(forKey: captureAreaKey),
+           let rect = try? JSONDecoder().decode(CodableRect.self, from: data) {
+            selectedCaptureRect = rect.cgRect
+            print("[AppModel] Loaded saved capture area: \(rect.cgRect)")
+        }
+    }
+
+    private func saveCaptureArea() {
+        guard let rect = selectedCaptureRect else {
+            UserDefaults.standard.removeObject(forKey: captureAreaKey)
+            return
+        }
+        let codableRect = CodableRect(cgRect: rect)
+        if let data = try? JSONEncoder().encode(codableRect) {
+            UserDefaults.standard.set(data, forKey: captureAreaKey)
+            print("[AppModel] Saved capture area: \(rect)")
+        }
     }
 
     deinit {
@@ -190,6 +214,7 @@ final class AppModel {
             DispatchQueue.main.async {
                 if let rect = rect {
                     self.selectedCaptureRect = rect
+                    self.saveCaptureArea()
                     self.status = .idle
                 } else {
                     self.status = .idle

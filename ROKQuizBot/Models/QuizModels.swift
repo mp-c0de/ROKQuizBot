@@ -409,6 +409,25 @@ struct AnswerLocation {
     let clickPoint: CGPoint
 }
 
+// MARK: - Codable Rect Helper
+struct CodableRect: Codable {
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+
+    var cgRect: CGRect {
+        CGRect(x: x, y: y, width: width, height: height)
+    }
+
+    init(cgRect: CGRect) {
+        self.x = cgRect.origin.x
+        self.y = cgRect.origin.y
+        self.width = cgRect.width
+        self.height = cgRect.height
+    }
+}
+
 // MARK: - Zone Type
 enum ZoneType: String, Codable, Equatable {
     case question
