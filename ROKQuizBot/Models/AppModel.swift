@@ -407,7 +407,15 @@ final class AppModel {
 
                     let clickPoint = matchingZone.clickPoint(in: captureRect)
                     mouseController.click(at: clickPoint)
-                    lastClickedAnswer = match.question.answer
+
+                    // Display the answer - include detected text if answer is a letter
+                    let answerUpper = match.question.answer.uppercased()
+                    if ["A", "B", "C", "D"].contains(answerUpper),
+                       let detectedText = cleanedAnswers[answerUpper], !detectedText.isEmpty {
+                        lastClickedAnswer = "\(answerUpper) (\(detectedText))"
+                    } else {
+                        lastClickedAnswer = match.question.answer
+                    }
                     answeredCount += 1
 
                     if soundEnabled {
@@ -460,7 +468,16 @@ final class AppModel {
         detectedAnswers: [String: String],
         layout: QuizLayoutConfiguration
     ) -> LayoutZone? {
-        let answerNormalised = normaliseForComparison(correctAnswer.lowercased())
+        let answerTrimmed = correctAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let answerUpper = answerTrimmed.uppercased()
+
+        // First check: if the answer is a zone label (A, B, C, D), return that zone directly
+        if ["A", "B", "C", "D"].contains(answerUpper) {
+            return layout.answerZones.first { $0.label == answerUpper }
+        }
+
+        // Second check: match by text content
+        let answerNormalised = normaliseForComparison(answerTrimmed.lowercased())
 
         // Find the best matching answer zone
         var bestMatch: (zone: LayoutZone, score: Double)?

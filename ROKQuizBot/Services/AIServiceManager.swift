@@ -393,6 +393,116 @@ final class AIServiceManager {
         return try JSONDecoder().decode(AIAnswerResponse.self, from: jsonData)
     }
 
+    // MARK: - Test Connection
+    /// Tests the API connection for the currently selected provider
+    func testConnection() async throws -> String {
+        guard isConfigured else {
+            throw AIServiceError.notConfigured
+        }
+
+        switch selectedProvider {
+        case .claude:
+            return try await testClaudeConnection()
+        case .openAI:
+            return try await testOpenAIConnection()
+        }
+    }
+
+    private func testClaudeConnection() async throws -> String {
+        let apiKey = getAPIKey(for: .claude)
+        guard !apiKey.isEmpty else {
+            throw AIServiceError.notConfigured
+        }
+
+        let requestBody: [String: Any] = [
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 10,
+            "messages": [
+                ["role": "user", "content": "Say OK"]
+            ]
+        ]
+
+        guard let url = URL(string: "https://api.anthropic.com/v1/messages") else {
+            throw AIServiceError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        request.timeoutInterval = 15
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AIServiceError.invalidResponse
+        }
+
+        if httpResponse.statusCode == 401 {
+            throw AIServiceError.invalidAPIKey
+        }
+
+        if httpResponse.statusCode == 429 {
+            throw AIServiceError.rateLimited
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw AIServiceError.apiError(statusCode: httpResponse.statusCode, message: errorMessage)
+        }
+
+        return "Claude API connection successful!"
+    }
+
+    private func testOpenAIConnection() async throws -> String {
+        let apiKey = getAPIKey(for: .openAI)
+        guard !apiKey.isEmpty else {
+            throw AIServiceError.notConfigured
+        }
+
+        let requestBody: [String: Any] = [
+            "model": "gpt-4o-mini",
+            "max_tokens": 10,
+            "messages": [
+                ["role": "user", "content": "Say OK"]
+            ]
+        ]
+
+        guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
+            throw AIServiceError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        request.timeoutInterval = 15
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AIServiceError.invalidResponse
+        }
+
+        if httpResponse.statusCode == 401 {
+            throw AIServiceError.invalidAPIKey
+        }
+
+        if httpResponse.statusCode == 429 {
+            throw AIServiceError.rateLimited
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw AIServiceError.apiError(statusCode: httpResponse.statusCode, message: errorMessage)
+        }
+
+        return "OpenAI API connection successful!"
+    }
+
     // MARK: - Helpers
     private func extractJSON(from text: String) -> String {
         var cleaned = text
