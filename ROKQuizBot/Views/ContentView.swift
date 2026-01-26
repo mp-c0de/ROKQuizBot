@@ -82,6 +82,37 @@ struct ContentView: View {
                 LabeledContent("Unknown", value: "\(appModel.unknownCount)")
             }
 
+            // Show saved layouts in sidebar for quick selection on launch
+            if !appModel.savedLayouts.isEmpty {
+                Section("Game Layout") {
+                    Picker("Select Game", selection: Binding(
+                        get: { appModel.layoutConfiguration?.id },
+                        set: { id in
+                            if let id = id {
+                                appModel.selectLayout(id)
+                            } else {
+                                appModel.clearLayoutConfiguration()
+                            }
+                        }
+                    )) {
+                        Text("None").tag(nil as UUID?)
+                        ForEach(appModel.savedLayouts) { layout in
+                            Text(layout.name).tag(layout.id as UUID?)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    if let layout = appModel.layoutConfiguration {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                            Text(layout.name)
+                                .font(.caption)
+                        }
+                    }
+                }
+            }
+
             Section("Controls") {
                 Button(action: { appModel.beginAreaSelection() }) {
                     Label("Select Capture Area", systemImage: "rectangle.dashed")
