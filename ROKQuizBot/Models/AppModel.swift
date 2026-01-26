@@ -338,10 +338,17 @@ final class AppModel {
             // OCR each zone separately
             let zoneResults = try await ocrService.recogniseZones(in: cgImage, layout: layout)
 
-            let questionText = zoneResults.question
-            let answers = zoneResults.answers
+            let questionText = cleanQuestionText(zoneResults.question)
 
-            lastOCRText = "Q: \(questionText)\n" + answers.map { "\($0.key): \($0.value)" }.sorted().joined(separator: "\n")
+            // Clean answer texts - remove leading letter prefix if OCR picked it up (e.g., "A Rune buffs" -> "Rune buffs")
+            var cleanedAnswers: [String: String] = [:]
+            for (label, text) in zoneResults.answers {
+                cleanedAnswers[label] = cleanAnswerText(text, label: label)
+            }
+
+            // Display text - sorted by label (A, B, C, D)
+            let sortedLabels = ["A", "B", "C", "D"].filter { cleanedAnswers[$0] != nil }
+            lastOCRText = "Q: \(questionText)\n" + sortedLabels.map { "\($0): \(cleanedAnswers[$0] ?? "")" }.joined(separator: "\n")
 
             // Try to match question
             if let match = questionDatabase.findBestMatch(for: questionText) {
@@ -350,7 +357,7 @@ final class AppModel {
                 // Find which answer zone matches the correct answer
                 if let matchingZone = findMatchingAnswerZone(
                     correctAnswer: match.question.answer,
-                    detectedAnswers: answers,
+                    detectedAnswers: cleanedAnswers,
                     layout: layout
                 ) {
                     // Click the centre of the matching answer zone
@@ -368,10 +375,11 @@ final class AppModel {
             } else {
                 // Question not found - add to unknown
                 if autoAddUnknown && !questionText.isEmpty {
-                    let options = Array(answers.values)
+                    // Store options in sorted order (A, B, C, D)
+                    let sortedOptions = sortedLabels.compactMap { cleanedAnswers[$0] }
                     questionDatabase.addUnknownQuestion(
                         questionText: questionText,
-                        options: options
+                        options: sortedOptions
                     )
                     unknownCount = questionDatabase.unknownQuestions.count
                 }
@@ -381,6 +389,27 @@ final class AppModel {
         } catch {
             print("Layout OCR error: \(error)")
         }
+    }
+
+    /// Cleans up question text - removes leading "Q1", "Q2", etc.
+    private func cleanQuestionText(_ text: String) -> String {
+        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Remove leading Q followed by number (e.g., "Q4 Which..." -> "Which...")
+        if let range = cleaned.range(of: #"^Q\d+\s*"#, options: .regularExpression) {
+            cleaned = String(cleaned[range.upperBound...])
+        }
+        return cleaned
+    }
+
+    /// Cleans up answer text - removes leading letter prefix if OCR picked it up
+    private func cleanAnswerText(_ text: String, label: String) -> String {
+        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Remove leading letter that matches the label (e.g., "A Rune buffs" -> "Rune buffs" for label "A")
+        let prefixPattern = "^\(label)\\s+"
+        if let range = cleaned.range(of: prefixPattern, options: .regularExpression) {
+            cleaned = String(cleaned[range.upperBound...])
+        }
+        return cleaned
     }
 
     /// Finds the layout zone that matches the correct answer
