@@ -15,7 +15,8 @@ final class MouseController {
 
     /// Performs a mouse click at the specified screen position.
     /// - Parameter point: The position to click in screen coordinates (origin top-left).
-    func click(at point: CGPoint) {
+    /// - Parameter moveAwayAfter: If true, moves the cursor away after clicking to prevent double-click issues.
+    func click(at point: CGPoint, moveAwayAfter: Bool = true) {
         // Move to position first
         moveTo(point)
 
@@ -42,6 +43,13 @@ final class MouseController {
         usleep(50000) // 50ms
 
         mouseUp.post(tap: .cghidEventTap)
+
+        // Move cursor away to prevent accidental double-click on next screen
+        if moveAwayAfter {
+            usleep(30000) // 30ms delay before moving
+            let awayPoint = CGPoint(x: point.x, y: point.y + 100) // Move 100 pixels down
+            moveTo(awayPoint)
+        }
     }
 
     /// Performs a double click at the specified screen position.

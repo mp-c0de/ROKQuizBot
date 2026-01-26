@@ -394,13 +394,9 @@ final class AIServiceManager {
     }
 
     // MARK: - Test Connection
-    /// Tests the API connection for the currently selected provider
-    func testConnection() async throws -> String {
-        guard isConfigured else {
-            throw AIServiceError.notConfigured
-        }
-
-        switch selectedProvider {
+    /// Tests the API connection for the specified provider
+    func testConnection(provider: AIProvider) async throws -> String {
+        switch provider {
         case .claude:
             return try await testClaudeConnection()
         case .openAI:

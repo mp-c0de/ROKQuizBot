@@ -11,8 +11,10 @@ struct SettingsView: View {
     @State private var openAIAPIKey: String = ""
     @State private var showingClaudeKey = false
     @State private var showingOpenAIKey = false
-    @State private var isTesting = false
-    @State private var testResult: TestResult?
+    @State private var isTestingClaude = false
+    @State private var isTestingOpenAI = false
+    @State private var claudeTestResult: TestResult?
+    @State private var openAITestResult: TestResult?
 
     enum TestResult {
         case success(String)
@@ -45,13 +47,8 @@ struct SettingsView: View {
 
                 Section("Active Provider") {
                     Picker("Use for AI Answers", selection: $aiManager.selectedProvider) {
-                        ForEach(AIProvider.allCases) { provider in
-                            HStack {
-                                Image(systemName: provider.iconName)
-                                Text(provider.displayName)
-                            }
-                            .tag(provider)
-                        }
+                        Text("Claude").tag(AIProvider.claude)
+                        Text("ChatGPT").tag(AIProvider.openAI)
                     }
                     .pickerStyle(.segmented)
 
@@ -102,8 +99,28 @@ struct SettingsView: View {
 
                         Spacer()
 
+                        Button("Test") {
+                            Task { await testClaudeConnection() }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isTestingClaude || claudeAPIKey.isEmpty)
+
                         Link("Get API Key", destination: AIProvider.claude.consoleURL)
                             .font(.caption)
+                    }
+
+                    if isTestingClaude {
+                        HStack {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("Testing Claude...")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    if let result = claudeTestResult {
+                        testResultView(result)
                     }
                 }
 
@@ -138,55 +155,36 @@ struct SettingsView: View {
 
                         Spacer()
 
+                        Button("Test") {
+                            Task { await testOpenAIConnection() }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isTestingOpenAI || openAIAPIKey.isEmpty)
+
                         Link("Get API Key", destination: AIProvider.openAI.consoleURL)
                             .font(.caption)
                     }
-                }
 
-                Section {
-                    HStack {
-                        Button("Save API Keys") {
-                            saveAPIKeys()
-                        }
-                        .buttonStyle(.borderedProminent)
-
-                        Button("Test API Connection") {
-                            Task { await testAPIConnection() }
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(isTesting || !aiManager.isConfigured)
-                    }
-
-                    if isTesting {
+                    if isTestingOpenAI {
                         HStack {
                             ProgressView()
                                 .scaleEffect(0.8)
-                            Text("Testing connection...")
+                            Text("Testing OpenAI...")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
                     }
 
-                    if let result = testResult {
-                        switch result {
-                        case .success(let message):
-                            HStack {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.green)
-                                Text(message)
-                                    .foregroundColor(.green)
-                            }
-                            .font(.caption)
-                        case .failure(let message):
-                            HStack {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundColor(.red)
-                                Text(message)
-                                    .foregroundColor(.red)
-                            }
-                            .font(.caption)
-                        }
+                    if let result = openAITestResult {
+                        testResultView(result)
                     }
+                }
+
+                Section {
+                    Button("Save API Keys") {
+                        saveAPIKeys()
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
 
                 Section {
@@ -202,6 +200,29 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
+    private func testResultView(_ result: TestResult) -> some View {
+        switch result {
+        case .success(let message):
+            HStack {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                Text(message)
+                    .foregroundColor(.green)
+            }
+            .font(.caption)
+        case .failure(let message):
+            HStack {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(.red)
+                Text(message)
+                    .foregroundColor(.red)
+                    .lineLimit(2)
+            }
+            .font(.caption)
+        }
+    }
+
     private func loadAPIKeys() {
         claudeAPIKey = aiManager.getAPIKey(for: .claude)
         openAIAPIKey = aiManager.getAPIKey(for: .openAI)
@@ -210,23 +231,48 @@ struct SettingsView: View {
     private func saveAPIKeys() {
         aiManager.setAPIKey(claudeAPIKey, for: .claude)
         aiManager.setAPIKey(openAIAPIKey, for: .openAI)
-        testResult = nil
+        claudeTestResult = nil
+        openAITestResult = nil
     }
 
-    private func testAPIConnection() async {
-        isTesting = true
-        testResult = nil
+    private func testClaudeConnection() async {
+        // Save first to test the current value
+        aiManager.setAPIKey(claudeAPIKey, for: .claude)
+
+        isTestingClaude = true
+        claudeTestResult = nil
 
         do {
-            let result = try await aiManager.testConnection()
+            let result = try await aiManager.testConnection(provider: .claude)
             await MainActor.run {
-                testResult = .success(result)
-                isTesting = false
+                claudeTestResult = .success(result)
+                isTestingClaude = false
             }
         } catch {
             await MainActor.run {
-                testResult = .failure(error.localizedDescription)
-                isTesting = false
+                claudeTestResult = .failure(error.localizedDescription)
+                isTestingClaude = false
+            }
+        }
+    }
+
+    private func testOpenAIConnection() async {
+        // Save first to test the current value
+        aiManager.setAPIKey(openAIAPIKey, for: .openAI)
+
+        isTestingOpenAI = true
+        openAITestResult = nil
+
+        do {
+            let result = try await aiManager.testConnection(provider: .openAI)
+            await MainActor.run {
+                openAITestResult = .success(result)
+                isTestingOpenAI = false
+            }
+        } catch {
+            await MainActor.run {
+                openAITestResult = .failure(error.localizedDescription)
+                isTestingOpenAI = false
             }
         }
     }
@@ -234,5 +280,5 @@ struct SettingsView: View {
 
 #Preview {
     SettingsView()
-        .frame(width: 500, height: 500)
+        .frame(width: 500, height: 550)
 }

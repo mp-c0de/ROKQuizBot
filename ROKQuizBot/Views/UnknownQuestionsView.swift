@@ -233,14 +233,37 @@ struct UnknownQuestionsView: View {
             }
 
             // Manual answer entry
+            TextField("Or enter answer manually...", text: $answerText)
+                .textFieldStyle(.roundedBorder)
+
+            // AI section
             HStack {
-                TextField("Or enter answer manually...", text: $answerText)
-                    .textFieldStyle(.roundedBorder)
+                Picker("AI", selection: Binding(
+                    get: { AIServiceManager.shared.selectedProvider },
+                    set: { AIServiceManager.shared.selectedProvider = $0 }
+                )) {
+                    Text("Claude").tag(AIProvider.claude)
+                    Text("ChatGPT").tag(AIProvider.openAI)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 180)
 
                 Button("Ask AI") {
                     Task { await askAIForAnswer() }
                 }
+                .buttonStyle(.bordered)
                 .disabled(!AIServiceManager.shared.isConfigured || isAskingAI)
+
+                if isAskingAI {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                }
+            }
+
+            if !AIServiceManager.shared.isConfigured {
+                Text("Configure \(AIServiceManager.shared.selectedProvider.displayName) API key in AI Settings")
+                    .font(.caption)
+                    .foregroundColor(.orange)
             }
 
             if let error = aiError {
