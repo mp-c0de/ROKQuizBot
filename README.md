@@ -9,7 +9,7 @@ Made by mpcode
 - **Instant Hotkey Trigger**: Press `0` to capture, find answer, and click - all in one instant action
 - **Screen Area Selection**: Click and drag to select the screen region containing the quiz
 - **Quiz Layout Configuration**: Define precise zones for question and answer areas - supports multiple games with named layouts
-- **OCR Text Recognition**: Uses Apple's Vision framework for fast text recognition
+- **OCR Text Recognition**: Uses Apple's Vision framework with tuneable preprocessing settings
 - **Fast Question Matching**: O(1) dictionary lookup with 837+ built-in questions
 - **Auto-Click Answers**: Automatically clicks on the correct answer location
 - **Unknown Questions**: Captures unrecognised questions for manual answer input
@@ -56,11 +56,17 @@ Made by mpcode
    - **Sound Effects**: Play sound when answering a question
    - **Auto-add Unknown**: Automatically save unrecognised questions
 
-5. **Manage Questions**:
+5. **OCR Settings**: Tune image preprocessing to improve text recognition:
+   - **Presets**: Default, Game Text (high contrast), Light on Dark
+   - **Fine Tuning**: Adjust contrast, brightness, scale factor
+   - **Options**: Grayscale, sharpening, colour inversion
+   - Use "Game Text" preset for stylised game text with low contrast
+
+6. **Manage Questions**:
    - View and search the question database
    - Review and resolve unknown questions
 
-6. **AI Settings** (Optional):
+7. **AI Settings** (Optional):
    - Configure Claude or ChatGPT API keys
    - Use AI to help answer unknown questions
 

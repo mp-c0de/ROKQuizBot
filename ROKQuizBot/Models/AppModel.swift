@@ -27,6 +27,11 @@ final class AppModel {
     var soundEnabled: Bool = true
     var autoAddUnknown: Bool = true
 
+    // OCR Settings (user-tunable)
+    var ocrSettings: OCRSettings = .default {
+        didSet { applyOCRSettings() }
+    }
+
     // Layout configuration
     var layoutConfiguration: QuizLayoutConfiguration? = nil
     var isConfiguringLayout: Bool = false
@@ -57,7 +62,44 @@ final class AppModel {
         loadQuestions()
         loadLayoutConfiguration()
         loadSavedCaptureArea()
+        loadOCRSettings()
         setupGlobalHotkey()
+    }
+
+    // MARK: - OCR Settings Persistence
+    private let ocrSettingsKey = "savedOCRSettings"
+
+    private func loadOCRSettings() {
+        if let data = UserDefaults.standard.data(forKey: ocrSettingsKey),
+           let settings = try? JSONDecoder().decode(OCRSettings.self, from: data) {
+            ocrSettings = settings
+            applyOCRSettings()
+            print("[AppModel] Loaded saved OCR settings")
+        }
+    }
+
+    func saveOCRSettings() {
+        if let data = try? JSONEncoder().encode(ocrSettings) {
+            UserDefaults.standard.set(data, forKey: ocrSettingsKey)
+            print("[AppModel] Saved OCR settings")
+        }
+    }
+
+    private func applyOCRSettings() {
+        ocrService.settings = ocrSettings
+    }
+
+    /// Applies a preset OCR configuration
+    func applyOCRPreset(_ preset: OCRPreset) {
+        switch preset {
+        case .default:
+            ocrSettings = .default
+        case .gameText:
+            ocrSettings = .gameText
+        case .lightOnDark:
+            ocrSettings = .lightOnDark
+        }
+        saveOCRSettings()
     }
 
     // MARK: - Capture Area Persistence

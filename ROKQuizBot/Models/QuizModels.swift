@@ -546,6 +546,74 @@ struct QuizLayoutConfiguration: Codable, Identifiable, Equatable {
     }
 }
 
+// MARK: - OCR Settings
+struct OCRSettings: Codable, Equatable {
+    /// Contrast multiplier (1.0 = no change, 2.0 = double contrast)
+    var contrast: Double = 2.0
+
+    /// Brightness adjustment (-1.0 to 1.0, 0.0 = no change)
+    var brightness: Double = 0.1
+
+    /// Whether to convert to grayscale before OCR
+    var grayscaleEnabled: Bool = true
+
+    /// Whether to apply sharpening (can help with blurry text)
+    var sharpeningEnabled: Bool = true
+
+    /// Sharpness intensity (0.0 to 2.0)
+    var sharpnessIntensity: Double = 0.5
+
+    /// Scale factor for small regions (1.0 = no scaling, 2.0 = double size)
+    /// Upscaling small regions can improve OCR accuracy
+    var scaleFactor: Double = 2.0
+
+    /// Minimum region size (in pixels) below which scaling is applied
+    var minRegionSize: Int = 100
+
+    /// Whether to apply binarization (convert to pure black/white)
+    var binarizationEnabled: Bool = false
+
+    /// Binarization threshold (0.0 to 1.0, pixels above = white, below = black)
+    var binarizationThreshold: Double = 0.5
+
+    /// Whether to invert colors (useful for light text on dark backgrounds)
+    var invertColors: Bool = false
+
+    static var `default`: OCRSettings { OCRSettings() }
+}
+
+// MARK: - OCR Presets
+enum OCRPreset: String, CaseIterable, Identifiable {
+    case `default` = "Default"
+    case gameText = "Game Text (High Contrast)"
+    case lightOnDark = "Light on Dark"
+
+    var id: String { rawValue }
+}
+
+extension OCRSettings {
+    /// Preset for game text with low contrast
+    static var gameText: OCRSettings {
+        var settings = OCRSettings()
+        settings.contrast = 2.5
+        settings.brightness = 0.15
+        settings.sharpeningEnabled = true
+        settings.sharpnessIntensity = 0.7
+        settings.scaleFactor = 2.5
+        return settings
+    }
+
+    /// Preset for light text on dark backgrounds
+    static var lightOnDark: OCRSettings {
+        var settings = OCRSettings()
+        settings.contrast = 2.0
+        settings.invertColors = true
+        settings.binarizationEnabled = true
+        settings.binarizationThreshold = 0.4
+        return settings
+    }
+}
+
 // MARK: - App Status
 enum AppStatus: Equatable {
     case idle

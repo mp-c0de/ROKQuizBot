@@ -11,46 +11,83 @@ import CoreImage
 final class OCRService {
     private let ciContext = CIContext()
 
-    /// Preprocesses an image to improve OCR accuracy.
-    /// Converts to grayscale and increases contrast.
-    private func preprocessImage(_ image: CGImage) -> CGImage {
-        let ciImage = CIImage(cgImage: image)
+    /// Current OCR settings - can be adjusted by user
+    var settings: OCRSettings = .default
 
-        // Convert to grayscale using CIColorMonochrome
-        guard let grayscaleFilter = CIFilter(name: "CIColorMonochrome") else {
-            return image
-        }
-        grayscaleFilter.setValue(ciImage, forKey: kCIInputImageKey)
-        grayscaleFilter.setValue(CIColor(red: 0.7, green: 0.7, blue: 0.7), forKey: "inputColor")
-        grayscaleFilter.setValue(1.0, forKey: "inputIntensity")
+    /// Preprocesses an image to improve OCR accuracy based on current settings.
+    private func preprocessImage(_ image: CGImage, forRegion isSmallRegion: Bool = false) -> CGImage {
+        var ciImage = CIImage(cgImage: image)
 
-        guard let grayscaleOutput = grayscaleFilter.outputImage else {
-            return image
+        // Step 1: Scale up small regions
+        if isSmallRegion && settings.scaleFactor > 1.0 {
+            let scale = CGAffineTransform(scaleX: settings.scaleFactor, y: settings.scaleFactor)
+            ciImage = ciImage.transformed(by: scale)
         }
 
-        // Increase contrast using CIColorControls
-        guard let contrastFilter = CIFilter(name: "CIColorControls") else {
-            // Return grayscale if contrast filter fails
-            if let result = ciContext.createCGImage(grayscaleOutput, from: grayscaleOutput.extent) {
-                return result
+        // Step 2: Invert colors if enabled (for light text on dark backgrounds)
+        if settings.invertColors {
+            if let filter = CIFilter(name: "CIColorInvert") {
+                filter.setValue(ciImage, forKey: kCIInputImageKey)
+                if let output = filter.outputImage {
+                    ciImage = output
+                }
             }
-            return image
         }
-        contrastFilter.setValue(grayscaleOutput, forKey: kCIInputImageKey)
-        contrastFilter.setValue(1.3, forKey: kCIInputContrastKey)  // Boost contrast
-        contrastFilter.setValue(0.05, forKey: kCIInputBrightnessKey)  // Slight brightness boost
-        contrastFilter.setValue(1.0, forKey: kCIInputSaturationKey)
 
-        guard let contrastOutput = contrastFilter.outputImage,
-              let result = ciContext.createCGImage(contrastOutput, from: contrastOutput.extent) else {
-            // Return grayscale if final conversion fails
-            if let result = ciContext.createCGImage(grayscaleOutput, from: grayscaleOutput.extent) {
-                return result
+        // Step 3: Convert to grayscale if enabled
+        if settings.grayscaleEnabled {
+            if let filter = CIFilter(name: "CIColorMonochrome") {
+                filter.setValue(ciImage, forKey: kCIInputImageKey)
+                filter.setValue(CIColor(red: 0.7, green: 0.7, blue: 0.7), forKey: "inputColor")
+                filter.setValue(1.0, forKey: "inputIntensity")
+                if let output = filter.outputImage {
+                    ciImage = output
+                }
             }
-            return image
         }
 
-        return result
+        // Step 4: Apply contrast and brightness
+        if settings.contrast != 1.0 || settings.brightness != 0.0 {
+            if let filter = CIFilter(name: "CIColorControls") {
+                filter.setValue(ciImage, forKey: kCIInputImageKey)
+                filter.setValue(settings.contrast, forKey: kCIInputContrastKey)
+                filter.setValue(settings.brightness, forKey: kCIInputBrightnessKey)
+                filter.setValue(settings.grayscaleEnabled ? 0.0 : 1.0, forKey: kCIInputSaturationKey)
+                if let output = filter.outputImage {
+                    ciImage = output
+                }
+            }
+        }
+
+        // Step 5: Apply sharpening if enabled
+        if settings.sharpeningEnabled && settings.sharpnessIntensity > 0 {
+            if let filter = CIFilter(name: "CISharpenLuminance") {
+                filter.setValue(ciImage, forKey: kCIInputImageKey)
+                filter.setValue(settings.sharpnessIntensity, forKey: kCIInputSharpnessKey)
+                if let output = filter.outputImage {
+                    ciImage = output
+                }
+            }
+        }
+
+        // Step 6: Apply binarization (threshold to black/white) if enabled
+        if settings.binarizationEnabled {
+            // Use CIColorThresholdOtsu for automatic threshold, or manual threshold
+            if let filter = CIFilter(name: "CIColorThreshold") {
+                filter.setValue(ciImage, forKey: kCIInputImageKey)
+                filter.setValue(settings.binarizationThreshold, forKey: "inputThreshold")
+                if let output = filter.outputImage {
+                    ciImage = output
+                }
+            }
+        }
+
+        // Convert back to CGImage
+        if let result = ciContext.createCGImage(ciImage, from: ciImage.extent) {
+            return result
+        }
+
+        return image
     }
 
     /// Recognises text in the given image using Vision framework.
@@ -138,8 +175,41 @@ final class OCRService {
             return ""
         }
 
-        let result = try await recogniseText(in: croppedImage)
-        return result.fullText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Determine if this is a small region that should be scaled up
+        let isSmallRegion = pixelWidth < settings.minRegionSize || pixelHeight < settings.minRegionSize
+
+        // Preprocess with scaling for small regions
+        let processedImage = preprocessImage(croppedImage, forRegion: isSmallRegion)
+
+        // Perform OCR on the preprocessed cropped image
+        return try await withCheckedThrowingContinuation { continuation in
+            let request = VNRecognizeTextRequest { request, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+
+                guard let observations = request.results as? [VNRecognizedTextObservation] else {
+                    continuation.resume(returning: "")
+                    return
+                }
+
+                let text = observations.compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+                continuation.resume(returning: text.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+
+            request.recognitionLevel = .accurate
+            request.recognitionLanguages = ["en-GB", "en-US"]
+            request.usesLanguageCorrection = true
+
+            let handler = VNImageRequestHandler(cgImage: processedImage, options: [:])
+
+            do {
+                try handler.perform([request])
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
     }
 
     /// Recognises text in all zones defined by the layout configuration.

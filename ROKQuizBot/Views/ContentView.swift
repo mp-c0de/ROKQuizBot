@@ -153,6 +153,51 @@ struct ContentView: View {
                 Toggle("Auto-add Unknown Questions", isOn: $appModel.autoAddUnknown)
             }
 
+            Section("OCR Settings") {
+                Picker("Preset", selection: Binding(
+                    get: { currentOCRPreset },
+                    set: { appModel.applyOCRPreset($0) }
+                )) {
+                    ForEach(OCRPreset.allCases) { preset in
+                        Text(preset.rawValue).tag(preset)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                DisclosureGroup("Fine Tuning") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Contrast: \(appModel.ocrSettings.contrast, specifier: "%.1f")")
+                                .font(.caption)
+                            Slider(value: $appModel.ocrSettings.contrast, in: 0.5...4.0, step: 0.1)
+                        }
+                        HStack {
+                            Text("Brightness: \(appModel.ocrSettings.brightness, specifier: "%.2f")")
+                                .font(.caption)
+                            Slider(value: $appModel.ocrSettings.brightness, in: -0.5...0.5, step: 0.05)
+                        }
+                        HStack {
+                            Text("Scale: \(appModel.ocrSettings.scaleFactor, specifier: "%.1f")x")
+                                .font(.caption)
+                            Slider(value: $appModel.ocrSettings.scaleFactor, in: 1.0...4.0, step: 0.5)
+                        }
+                        Toggle("Grayscale", isOn: $appModel.ocrSettings.grayscaleEnabled)
+                            .font(.caption)
+                        Toggle("Sharpening", isOn: $appModel.ocrSettings.sharpeningEnabled)
+                            .font(.caption)
+                        Toggle("Invert Colors", isOn: $appModel.ocrSettings.invertColors)
+                            .font(.caption)
+
+                        Button("Save Settings") {
+                            appModel.saveOCRSettings()
+                        }
+                        .buttonStyle(.bordered)
+                        .font(.caption)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+
             Section("Data") {
                 Button(action: { showingUnknownQuestions = true }) {
                     Label("Unknown Questions (\(appModel.unknownCount))", systemImage: "questionmark.circle")
@@ -367,6 +412,14 @@ struct ContentView: View {
         case .error:
             return .red
         }
+    }
+
+    // MARK: - OCR Preset Detection
+    private var currentOCRPreset: OCRPreset {
+        let settings = appModel.ocrSettings
+        if settings == .gameText { return .gameText }
+        if settings == .lightOnDark { return .lightOnDark }
+        return .default
     }
 }
 
