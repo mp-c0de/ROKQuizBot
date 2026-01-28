@@ -5,7 +5,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var appModel = AppModel()
+    @Bindable private var appModel = AppModel.shared
     @State private var showingSettings = false
     @State private var showingUnknownQuestions = false
     @State private var showingQuestionDatabase = false
@@ -14,6 +14,15 @@ struct ContentView: View {
     @State private var showingSaveAsDialog = false
     @State private var layoutToRename: QuizLayoutConfiguration? = nil
     @State private var renameText = ""
+
+    // Computed properties to avoid inline observable checks in .disabled()
+    private var hasCaptureArea: Bool {
+        appModel.selectedCaptureRect != nil
+    }
+
+    private var canConfigureLayout: Bool {
+        hasCaptureArea && !appModel.status.isRunning && !appModel.isConfiguringLayout
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -62,6 +71,10 @@ struct ContentView: View {
             }
         } message: {
             Text("Enter a new name for the layout")
+        }
+        .onDisappear {
+            // Clean up overlay when view disappears
+            CaptureAreaOverlay.close()
         }
     }
 
@@ -122,7 +135,7 @@ struct ContentView: View {
                 Button(action: { appModel.beginLayoutConfiguration() }) {
                     Label("Configure Quiz Layout", systemImage: "rectangle.split.2x2")
                 }
-                .disabled(appModel.selectedCaptureRect == nil || appModel.status.isRunning || appModel.isConfiguringLayout)
+                .disabled(!canConfigureLayout)
 
                 Button(action: { appModel.captureAndAnswer() }) {
                     Label(
@@ -130,7 +143,7 @@ struct ContentView: View {
                         systemImage: appModel.status.isRunning ? "hourglass" : "sparkle.magnifyingglass"
                     )
                 }
-                .disabled(appModel.selectedCaptureRect == nil || appModel.status.isRunning || appModel.isConfiguringLayout)
+                .disabled(!canConfigureLayout)
             }
 
             Section("Hotkey") {
@@ -152,22 +165,24 @@ struct ContentView: View {
                 Toggle("Sound Effects", isOn: $appModel.soundEnabled)
                 Toggle("Auto-add Unknown Questions", isOn: $appModel.autoAddUnknown)
                 Toggle("Show Capture Area Border", isOn: $appModel.showCaptureOverlay)
-                    .disabled(appModel.selectedCaptureRect == nil)
+                    .disabled(!hasCaptureArea)
+                    .task(id: appModel.showCaptureOverlay) {
+                        // Runs AFTER render - no cycle
+                        appModel.saveCaptureOverlaySetting()
+                        appModel.setOverlayEnabled(appModel.showCaptureOverlay)
+                    }
             }
 
             Section("Capture Quality") {
-                Picker("Quality", selection: Binding(
-                    get: { appModel.captureQuality },
-                    set: {
-                        appModel.captureQuality = $0
-                        appModel.saveCaptureQuality()
-                    }
-                )) {
+                Picker("Quality", selection: $appModel.captureQuality) {
                     ForEach(CaptureQuality.allCases) { quality in
                         Text(quality.rawValue).tag(quality)
                     }
                 }
                 .pickerStyle(.segmented)
+                .task(id: appModel.captureQuality) {
+                    appModel.saveCaptureQuality()
+                }
 
                 Text(appModel.captureQuality.description)
                     .font(.caption)
@@ -245,8 +260,34 @@ struct ContentView: View {
             if let rect = appModel.selectedCaptureRect {
                 GroupBox("Capture Area") {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Position: (\(Int(rect.origin.x)), \(Int(rect.origin.y)))")
+                        HStack {
+                            Text("Position: (\(Int(rect.origin.x)), \(Int(rect.origin.y)))")
+                            Spacer()
+                            if appModel.hasUnsavedCaptureArea {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "exclamationmark.circle.fill")
+                                        .foregroundColor(.orange)
+                                    Text("Unsaved")
+                                        .foregroundColor(.orange)
+                                }
+                                .font(.caption)
+                            } else {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.green)
+                                    Text("Saved")
+                                        .foregroundColor(.green)
+                                }
+                                .font(.caption)
+                            }
+                        }
                         Text("Size: \(Int(rect.width)) × \(Int(rect.height))")
+
+                        if appModel.hasUnsavedCaptureArea {
+                            Text("Save a layout to persist this capture area")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
                     .font(.system(.body, design: .monospaced))
                     .frame(maxWidth: .infinity, alignment: .leading)

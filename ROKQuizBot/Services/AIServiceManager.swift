@@ -327,10 +327,25 @@ final class AIServiceManager {
                 [
                     "role": "system",
                     "content": """
-                    You are a quiz answer assistant. The user will show you a screenshot of a quiz question.
-                    Read the question and determine the correct answer.
-                    Return ONLY a valid JSON object:
-                    {"question": "...", "answer": "...", "confidence": 0.0-1.0, "explanation": "..." or null}
+                    You are a quiz answer assistant. The user will show you a screenshot of a quiz question from the game Rise of Kingdoms.
+                    Your task is to:
+                    1. Read the question text from the image
+                    2. Identify all answer options visible
+                    3. Determine the correct answer
+
+                    IMPORTANT: Return the FULL TEXT of the correct answer, NOT just the letter (A, B, C, D).
+                    For example, if option B says "Julius Caesar", return "Julius Caesar" as the answer, NOT "B".
+
+                    Return ONLY a valid JSON object with these fields:
+                    {
+                        "question": "the question text you read",
+                        "answer": "the full text of the correct answer (not the letter)",
+                        "confidence": number between 0 and 1,
+                        "explanation": "brief explanation why this is correct" or null
+                    }
+
+                    If you cannot read the question clearly, set confidence lower.
+                    If you're unsure of the answer, still provide your best guess with appropriate confidence.
                     """
                 ],
                 [
@@ -344,7 +359,7 @@ final class AIServiceManager {
                         ],
                         [
                             "type": "text",
-                            "text": "What is the correct answer to this quiz question?"
+                            "text": "What is the correct answer to this quiz question? Remember to return the FULL answer text, not just the letter."
                         ]
                     ]
                 ]

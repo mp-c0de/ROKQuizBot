@@ -410,7 +410,7 @@ struct AnswerLocation {
 }
 
 // MARK: - Codable Rect Helper
-struct CodableRect: Codable {
+struct CodableRect: Codable, Equatable {
     var x: Double
     var y: Double
     var width: Double
@@ -491,14 +491,16 @@ struct QuizLayoutConfiguration: Codable, Identifiable, Equatable {
     var name: String
     var questionZone: LayoutZone?
     var answerZones: [LayoutZone]  // 2-4 answers
+    var captureRect: CodableRect?  // The capture area for this layout
     var createdAt: Date
     var updatedAt: Date
 
-    init(id: UUID = UUID(), name: String = "Default Layout", questionZone: LayoutZone? = nil, answerZones: [LayoutZone] = []) {
+    init(id: UUID = UUID(), name: String = "Default Layout", questionZone: LayoutZone? = nil, answerZones: [LayoutZone] = [], captureRect: CGRect? = nil) {
         self.id = id
         self.name = name
         self.questionZone = questionZone
         self.answerZones = answerZones
+        self.captureRect = captureRect.map { CodableRect(cgRect: $0) }
         self.createdAt = Date()
         self.updatedAt = Date()
     }

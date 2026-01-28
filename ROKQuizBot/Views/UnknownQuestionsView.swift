@@ -348,6 +348,6 @@ extension Array {
 }
 
 #Preview {
-    UnknownQuestionsView(appModel: AppModel())
+    UnknownQuestionsView(appModel: AppModel.shared)
         .frame(width: 900, height: 700)
 }

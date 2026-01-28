@@ -48,11 +48,15 @@ final class LayoutConfigurationWindow: NSWindow, NSWindowDelegate {
         alphaValue = 1.0
         delegate = self
 
+        // Use existing layout or create a default one with pre-populated zones for convenience
+        let layoutToEdit = existingLayout ?? QuizLayoutConfiguration.createDefault()
+        let isEditingExisting = existingLayout != nil  // Only true if actually editing a saved layout
         overlayView = LayoutConfigurationView(
             frame: frame,
             image: image,
             captureRect: captureRect,
-            existingLayout: existingLayout ?? QuizLayoutConfiguration.createDefault()
+            existingLayout: layoutToEdit,
+            isEditingExisting: isEditingExisting
         )
         contentView = overlayView
 
@@ -68,7 +72,9 @@ final class LayoutConfigurationWindow: NSWindow, NSWindowDelegate {
     override var canBecomeMain: Bool { true }
 
     func windowDidResignKey(_ notification: Notification) {
-        overlayView.cancelConfiguration()
+        // Don't auto-cancel when window loses focus - user should explicitly press ESC
+        // This prevents accidental cancellation when clicking elsewhere
+        // overlayView.cancelConfiguration()
     }
 }
 
@@ -140,11 +146,12 @@ final class LayoutConfigurationView: NSView, NSTextFieldDelegate {
 
     // Layout name input
     private var nameTextField: NSTextField!
-    private var existingLayoutId: UUID?
+    private var existingLayoutId: UUID?  // Only set when editing a truly existing saved layout
 
-    init(frame: CGRect, image: NSImage, captureRect: CGRect, existingLayout: QuizLayoutConfiguration) {
+    init(frame: CGRect, image: NSImage, captureRect: CGRect, existingLayout: QuizLayoutConfiguration, isEditingExisting: Bool) {
         self.backgroundImage = image
-        self.existingLayoutId = existingLayout.questionZone != nil ? existingLayout.id : nil
+        // Only preserve the layout ID if we're actually editing an existing saved layout
+        self.existingLayoutId = isEditingExisting ? existingLayout.id : nil
 
         // Calculate where to draw the image (centred in view, scaled to fit)
         let viewAspect = frame.width / frame.height
@@ -178,21 +185,45 @@ final class LayoutConfigurationView: NSView, NSTextFieldDelegate {
         wantsLayer = true
         layer?.backgroundColor = NSColor(calibratedWhite: 0.1, alpha: 0.95).cgColor
 
-        // Create name text field
-        let textFieldWidth: CGFloat = 300
-        let textFieldHeight: CGFloat = 24
+        // Create name input section with label - positioned prominently at top
+        let labelWidth: CGFloat = 400
+        let labelHeight: CGFloat = 20
+        let textFieldWidth: CGFloat = 400
+        let textFieldHeight: CGFloat = 32
+        let topMargin: CGFloat = frame.height - 100  // Near the top
+
+        // Label above text field
+        let nameLabel = NSTextField(labelWithString: "LAYOUT NAME (required):")
+        nameLabel.frame = CGRect(
+            x: (frame.width - labelWidth) / 2,
+            y: topMargin + textFieldHeight + 8,
+            width: labelWidth,
+            height: labelHeight
+        )
+        nameLabel.alignment = .center
+        nameLabel.font = .systemFont(ofSize: 14, weight: .bold)
+        nameLabel.textColor = .white
+        addSubview(nameLabel)
+
+        // Name text field - larger and more prominent
         nameTextField = NSTextField(frame: CGRect(
             x: (frame.width - textFieldWidth) / 2,
-            y: 20,
+            y: topMargin,
             width: textFieldWidth,
             height: textFieldHeight
         ))
-        nameTextField.stringValue = existingLayout.name
+        nameTextField.wantsLayer = true
+        nameTextField.layer?.cornerRadius = 6
+        nameTextField.layer?.borderWidth = 2
+        nameTextField.layer?.borderColor = NSColor.systemBlue.cgColor
+        // For new layouts, show empty field with placeholder; for existing, show the name
+        nameTextField.stringValue = isEditingExisting ? existingLayout.name : ""
         nameTextField.placeholderString = "Enter layout name (e.g., Game1, ROK Quiz)"
         nameTextField.alignment = .center
-        nameTextField.font = .systemFont(ofSize: 14, weight: .medium)
+        nameTextField.font = .systemFont(ofSize: 18, weight: .medium)
         nameTextField.delegate = self
         nameTextField.bezelStyle = .roundedBezel
+        nameTextField.focusRingType = .none
         addSubview(nameTextField)
 
         // Load existing zones
@@ -453,16 +484,26 @@ final class LayoutConfigurationView: NSView, NSTextFieldDelegate {
 
     func finishConfiguration() {
         guard !didFinish else { return }
-        didFinish = true
 
         let questionZone = zones.first { $0.zoneType == .question }?.toLayoutZone()
         let answerZones = zones.filter { $0.zoneType == .answer }.map { $0.toLayoutZone() }
 
-        // Get name from text field, use default if empty
-        var layoutName = nameTextField.stringValue.trimmingCharacters(in: .whitespaces)
+        // Get name from text field - REQUIRE a name for new layouts
+        let layoutName = nameTextField.stringValue.trimmingCharacters(in: .whitespaces)
         if layoutName.isEmpty {
-            layoutName = "Untitled Layout"
+            // Shake the text field to indicate name is required
+            let animation = CAKeyframeAnimation(keyPath: "transform.translation.x")
+            animation.timingFunction = CAMediaTimingFunction(name: .linear)
+            animation.duration = 0.4
+            animation.values = [-10, 10, -8, 8, -5, 5, -2, 2, 0]
+            nameTextField.layer?.add(animation, forKey: "shake")
+
+            // Focus the text field
+            window?.makeFirstResponder(nameTextField)
+            return  // Don't save without a name
         }
+
+        didFinish = true
 
         // Preserve the existing layout ID if editing, otherwise create new
         let layoutId = existingLayoutId ?? UUID()
@@ -477,11 +518,11 @@ final class LayoutConfigurationView: NSView, NSTextFieldDelegate {
         onFinish?(layout)
     }
 
-    // Handle Enter key in text field
+    // Handle Enter key in text field - save and close
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         if commandSelector == #selector(insertNewline(_:)) {
-            // Enter pressed - finish configuration
-            window?.makeFirstResponder(self)
+            // Enter pressed in text field - save the layout
+            finishConfiguration()
             return true
         }
         return false
@@ -567,8 +608,8 @@ final class LayoutConfigurationView: NSView, NSTextFieldDelegate {
 
     private func drawInstructions() {
         let instructions = """
-        Q = Question zone | A/B/C/D = Answer zones | Delete = Remove selected | Enter = Save | ESC = Cancel
-        Drag zones to move, drag handles to resize | Enter a name for this layout at the bottom
+        Q = Question zone | A/B/C/D = Answer zones | Delete = Remove selected | ESC = Cancel
+        Drag zones to move, drag handles to resize | Enter name above and press Enter to save
         """
 
         let attrs: [NSAttributedString.Key: Any] = [

@@ -261,6 +261,50 @@ final class QuestionDatabaseService {
         return all.sorted { $0.text < $1.text }
     }
 
+    /// Get only user-added questions (editable)
+    func getUserQuestions() -> [QuestionAnswer] {
+        return userQuestions.map { QuestionAnswer(text: $0.key, answer: $0.value) }
+            .sorted { $0.text < $1.text }
+    }
+
+    /// Get user questions count
+    var userQuestionCount: Int {
+        return userQuestions.count
+    }
+
+    // MARK: - Edit/Delete User Questions
+
+    /// Update an existing user question
+    func updateUserQuestion(oldText: String, newText: String, newAnswer: String) {
+        let oldNormalized = oldText.lowercased().trimmingCharacters(in: .whitespaces)
+        let newNormalized = newText.lowercased().trimmingCharacters(in: .whitespaces)
+
+        // Remove old entry
+        userQuestions.removeValue(forKey: oldNormalized)
+
+        // Add updated entry (if not already in built-in)
+        if !BuiltInQuestions.contains(newNormalized) {
+            userQuestions[newNormalized] = newAnswer
+        }
+
+        saveUserQuestions()
+        print("[QuestionDB] Updated user question: \(newText.prefix(50))...")
+    }
+
+    /// Delete a user question
+    func deleteUserQuestion(text: String) {
+        let normalized = text.lowercased().trimmingCharacters(in: .whitespaces)
+        userQuestions.removeValue(forKey: normalized)
+        saveUserQuestions()
+        print("[QuestionDB] Deleted user question: \(text.prefix(50))...")
+    }
+
+    /// Check if a question is user-added (editable)
+    func isUserQuestion(_ text: String) -> Bool {
+        let normalized = text.lowercased().trimmingCharacters(in: .whitespaces)
+        return userQuestions[normalized] != nil
+    }
+
     // MARK: - Helpers
 
     private func stringSimilarity(_ s1: String, _ s2: String) -> Double {

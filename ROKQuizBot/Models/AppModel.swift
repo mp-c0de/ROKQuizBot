@@ -21,14 +21,15 @@ final class AppModel {
     var answeredCount: Int = 0
     var unknownCount: Int = 0
 
+    // Track if capture area is unsaved (not associated with a layout)
+    var hasUnsavedCaptureArea: Bool = false
+
     // Settings
     var clickDelay: Double = 0.1 // Delay before clicking (reduced for faster response)
     var hideCursorDuringCapture: Bool = true
     var soundEnabled: Bool = true
     var autoAddUnknown: Bool = true
-    var showCaptureOverlay: Bool = false {
-        didSet { updateCaptureOverlay() }
-    }
+    var showCaptureOverlay: Bool = false
 
     // OCR Settings (user-tunable)
     var ocrSettings: OCRSettings = .default {
@@ -59,7 +60,14 @@ final class AppModel {
     private var isAutoAnswering = false  // Toggle for continuous auto-answer loop
 
     // MARK: - Init
-    init() {
+    // Singleton instance
+    static let shared = AppModel()
+
+    private let instanceID = UUID()
+
+    private init() {
+        print("[AppModel] Creating singleton instance: \(instanceID)")
+
         self.questionDatabase = QuestionDatabaseService()
         self.layoutService = LayoutConfigurationService()
         self.screenCapture = ScreenCaptureService()
@@ -68,11 +76,14 @@ final class AppModel {
         self.aiService = AIServiceManager.shared
 
         loadQuestions()
-        loadLayoutConfiguration()
-        loadSavedCaptureArea()
+        cleanupLegacyCaptureAreaData()  // Remove old standalone capture area data
+        loadLayoutConfiguration()  // This now loads capture area from active layout
         loadOCRSettings()
         loadCaptureQuality()
+        loadCaptureOverlaySetting()
         setupGlobalHotkey()
+
+        print("[AppModel] Init complete. Capture area: \(selectedCaptureRect?.debugDescription ?? "nil"), layout: \(layoutConfiguration?.name ?? "none")")
     }
 
     // MARK: - OCR Settings Persistence
@@ -133,34 +144,60 @@ final class AppModel {
     }
 
     // MARK: - Capture Overlay
-    private func updateCaptureOverlay() {
-        if showCaptureOverlay, let rect = selectedCaptureRect {
-            CaptureAreaOverlay.show(rect: rect)
-        } else {
-            CaptureAreaOverlay.hide()
+    private let captureOverlayKey = "showCaptureOverlay"
+
+    private func loadCaptureOverlaySetting() {
+        // Load saved value - the .task(id:) in the view will handle showing the overlay
+        showCaptureOverlay = UserDefaults.standard.bool(forKey: captureOverlayKey)
+    }
+
+    func saveCaptureOverlaySetting() {
+        UserDefaults.standard.set(showCaptureOverlay, forKey: captureOverlayKey)
+    }
+
+    func setOverlayEnabled(_ enabled: Bool) {
+        // Only AppKit work here - no @Observable state mutation
+        let rect = selectedCaptureRect
+        DispatchQueue.main.async {
+            if enabled, let rect = rect {
+                CaptureAreaOverlay.show(rect: rect)
+            } else {
+                CaptureAreaOverlay.hide()
+            }
         }
     }
 
-    // MARK: - Capture Area Persistence
-    private let captureAreaKey = "savedCaptureArea"
+    func updateCaptureOverlay() {
+        setOverlayEnabled(showCaptureOverlay)
+    }
 
-    private func loadSavedCaptureArea() {
-        if let data = UserDefaults.standard.data(forKey: captureAreaKey),
-           let rect = try? JSONDecoder().decode(CodableRect.self, from: data) {
-            selectedCaptureRect = rect.cgRect
-            print("[AppModel] Loaded saved capture area: \(rect.cgRect)")
+    // MARK: - Capture Area (now only persisted via layouts)
+
+    /// One-time cleanup of old standalone capture area data from UserDefaults
+    private func cleanupLegacyCaptureAreaData() {
+        let oldKey = "savedCaptureArea"
+        if UserDefaults.standard.data(forKey: oldKey) != nil {
+            UserDefaults.standard.removeObject(forKey: oldKey)
+            print("[AppModel] Cleaned up legacy capture area data from UserDefaults")
         }
     }
 
-    private func saveCaptureArea() {
-        guard let rect = selectedCaptureRect else {
-            UserDefaults.standard.removeObject(forKey: captureAreaKey)
-            return
-        }
-        let codableRect = CodableRect(cgRect: rect)
-        if let data = try? JSONEncoder().encode(codableRect) {
-            UserDefaults.standard.set(data, forKey: captureAreaKey)
-            print("[AppModel] Saved capture area: \(rect)")
+    /// Checks if there's an unsaved capture area that will be lost on quit
+    func checkForUnsavedChanges() -> Bool {
+        return hasUnsavedCaptureArea && selectedCaptureRect != nil
+    }
+
+    /// Discards the current unsaved capture area
+    func discardUnsavedCaptureArea() {
+        if hasUnsavedCaptureArea {
+            // Restore from active layout if available
+            if let layout = layoutConfiguration, let savedRect = layout.captureRect {
+                selectedCaptureRect = savedRect.cgRect
+            } else {
+                selectedCaptureRect = nil
+            }
+            hasUnsavedCaptureArea = false
+            updateCaptureOverlay()
         }
     }
 
@@ -184,6 +221,12 @@ final class AppModel {
     // MARK: - Layout Configuration
     private func loadLayoutConfiguration() {
         layoutConfiguration = layoutService.activeLayout
+
+        // Restore capture rect from active layout if it has one
+        if let layout = layoutConfiguration, let savedRect = layout.captureRect {
+            selectedCaptureRect = savedRect.cgRect
+            print("[AppModel] Loaded capture rect from layout: \(savedRect.cgRect)")
+        }
     }
 
     /// Opens the layout configuration window to set up question/answer zones
@@ -193,42 +236,68 @@ final class AppModel {
             return
         }
 
+        print("[AppModel] beginLayoutConfiguration: Starting with rect \(rect)")
         isConfiguringLayout = true
 
         // Take a screenshot of the capture area
         Task {
             do {
+                print("[AppModel] beginLayoutConfiguration: Starting screen capture stream")
                 try await screenCapture.startStream()
                 guard let cgImage = try await screenCapture.capture(rect: rect) else {
+                    print("[AppModel] beginLayoutConfiguration: Failed to capture image")
                     await screenCapture.stopStream()
                     isConfiguringLayout = false
                     return
                 }
                 await screenCapture.stopStream()
+                print("[AppModel] beginLayoutConfiguration: Got image \(cgImage.width)x\(cgImage.height)")
 
                 let nsImage = NSImage(cgImage: cgImage, size: rect.size)
 
-                // Present the layout configuration window
+                // Check if capture area changed from the layout's saved capture rect
+                // If significantly different, treat this as a NEW layout
                 let existingLayout = self.layoutConfiguration
+                let captureAreaChanged: Bool
+                if let existing = existingLayout, let savedRect = existing.captureRect?.cgRect {
+                    // Consider it changed if position or size differs by more than 10 pixels
+                    let posDiff = abs(savedRect.origin.x - rect.origin.x) + abs(savedRect.origin.y - rect.origin.y)
+                    let sizeDiff = abs(savedRect.width - rect.width) + abs(savedRect.height - rect.height)
+                    captureAreaChanged = posDiff > 10 || sizeDiff > 10
+                    print("[AppModel] Capture area comparison - saved: \(savedRect), current: \(rect), changed: \(captureAreaChanged)")
+                } else {
+                    captureAreaChanged = false
+                }
+
+                // If capture area changed, pass nil as existing layout to force creating a new one
+                let layoutToEdit = captureAreaChanged ? nil : existingLayout
+                print("[AppModel] beginLayoutConfiguration: Presenting window with layout: \(layoutToEdit?.name ?? "nil (new)")")
+
                 LayoutConfigurationWindow.present(
                     with: nsImage,
                     captureRect: rect,
-                    existingLayout: existingLayout
+                    existingLayout: layoutToEdit
                 ) { [weak self] layout in
                     guard let self = self else { return }
                     DispatchQueue.main.async {
                         self.isConfiguringLayout = false
-                        if let layout = layout {
+                        if var layout = layout {
+                            // Save the current capture rect with the layout
+                            layout.captureRect = self.selectedCaptureRect.map { CodableRect(cgRect: $0) }
                             self.layoutConfiguration = layout
 
                             // Check if this is an update to an existing layout or a new one
-                            if existingLayout != nil && self.layoutService.getLayout(layout.id) != nil {
+                            let existsInService = self.layoutService.getLayout(layout.id) != nil
+                            if existsInService {
                                 self.layoutService.updateLayout(layout)
-                                print("[AppModel] Updated layout: \(layout.name)")
+                                print("[AppModel] Updated layout: \(layout.name) (id: \(layout.id)) with capture rect: \(layout.captureRect?.cgRect.debugDescription ?? "nil")")
                             } else {
                                 self.layoutService.addLayout(layout, setActive: true)
-                                print("[AppModel] Created new layout: \(layout.name)")
+                                print("[AppModel] Created new layout: \(layout.name) (id: \(layout.id)) with capture rect: \(layout.captureRect?.cgRect.debugDescription ?? "nil")")
                             }
+
+                            // Capture area is now saved with the layout
+                            self.hasUnsavedCaptureArea = false
                         }
                     }
                 }
@@ -254,7 +323,16 @@ final class AppModel {
     func selectLayout(_ id: UUID) {
         layoutService.setActiveLayout(id)
         layoutConfiguration = layoutService.activeLayout
-        print("[AppModel] Switched to layout: \(layoutConfiguration?.name ?? "none")")
+
+        // Restore the capture rect from the layout
+        if let layout = layoutConfiguration, let savedRect = layout.captureRect {
+            selectedCaptureRect = savedRect.cgRect
+            hasUnsavedCaptureArea = false  // Loaded from saved layout
+            updateCaptureOverlay()
+            print("[AppModel] Switched to layout: \(layout.name) with capture rect: \(savedRect.cgRect)")
+        } else {
+            print("[AppModel] Switched to layout: \(layoutConfiguration?.name ?? "none") (no saved capture rect)")
+        }
     }
 
     /// Deletes a saved layout
@@ -275,16 +353,28 @@ final class AppModel {
         }
     }
 
-    /// Saves the current layout with a new name (creates a copy)
+    /// Saves the current layout with a new name (creates a copy with current capture rect)
     func saveLayoutAs(name: String) {
         guard let current = layoutConfiguration else { return }
+
+        // Create a new layout with new UUID and current capture rect
         let newLayout = QuizLayoutConfiguration(
             name: name,
             questionZone: current.questionZone,
-            answerZones: current.answerZones
+            answerZones: current.answerZones,
+            captureRect: selectedCaptureRect  // Use current capture rect, not the original layout's
         )
+
+        print("[AppModel] saveLayoutAs: Creating new layout '\(name)' with capture rect: \(newLayout.captureRect?.cgRect.debugDescription ?? "nil")")
+        print("[AppModel] saveLayoutAs: Original layout '\(current.name)' (id: \(current.id)) unchanged")
+
         layoutService.addLayout(newLayout, setActive: true)
         layoutConfiguration = layoutService.activeLayout
+
+        // Capture area is now saved with the layout
+        hasUnsavedCaptureArea = false
+
+        print("[AppModel] saveLayoutAs: New layout active (id: \(layoutConfiguration?.id.uuidString ?? "nil"))")
     }
 
     // MARK: - Area Selection
@@ -295,8 +385,11 @@ final class AppModel {
             DispatchQueue.main.async {
                 if let rect = rect {
                     self.selectedCaptureRect = rect
-                    self.saveCaptureArea()
+                    // Mark as unsaved - user needs to save a layout to persist this
+                    self.hasUnsavedCaptureArea = true
+                    self.updateCaptureOverlay()
                     self.status = .idle
+                    print("[AppModel] Capture area selected (unsaved): \(rect)")
                 } else {
                     self.status = .idle
                 }
@@ -873,5 +966,27 @@ final class AppModel {
 
     func getAllQuestions() -> [QuestionAnswer] {
         return questionDatabase.getAllQuestions()
+    }
+
+    func getUserQuestions() -> [QuestionAnswer] {
+        return questionDatabase.getUserQuestions()
+    }
+
+    var userQuestionCount: Int {
+        return questionDatabase.userQuestionCount
+    }
+
+    func updateUserQuestion(oldText: String, newText: String, newAnswer: String) {
+        questionDatabase.updateUserQuestion(oldText: oldText, newText: newText, newAnswer: newAnswer)
+        questionsLoaded = questionDatabase.totalQuestionCount
+    }
+
+    func deleteUserQuestion(text: String) {
+        questionDatabase.deleteUserQuestion(text: text)
+        questionsLoaded = questionDatabase.totalQuestionCount
+    }
+
+    func isUserQuestion(_ text: String) -> Bool {
+        return questionDatabase.isUserQuestion(text)
     }
 }

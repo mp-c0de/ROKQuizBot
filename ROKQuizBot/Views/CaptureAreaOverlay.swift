@@ -4,51 +4,66 @@
 
 import AppKit
 
-/// A transparent window that displays red borders around the capture area
-final class CaptureAreaOverlay: NSWindow {
+/// A transparent panel that displays red borders around the capture area
+/// Uses NSPanel so it doesn't prevent app termination
+final class CaptureAreaOverlay: NSPanel {
     private static var shared: CaptureAreaOverlay?
     private var borderView: BorderView!
 
     static func show(rect: CGRect) {
-        if shared == nil {
-            shared = CaptureAreaOverlay()
+        // Create on main thread
+        DispatchQueue.main.async {
+            if shared == nil {
+                shared = CaptureAreaOverlay()
+            }
+
+            guard let overlay = shared else { return }
+
+            // Convert from Quartz coordinates (origin top-left) to Cocoa coordinates (origin bottom-left)
+            guard let screen = NSScreen.main else { return }
+            let screenHeight = screen.frame.height
+
+            // In Quartz: Y=0 at top, increases downward
+            // In Cocoa: Y=0 at bottom, increases upward
+            let cocoaY = screenHeight - rect.origin.y - rect.height
+
+            let cocoaRect = CGRect(
+                x: rect.origin.x,
+                y: cocoaY,
+                width: rect.width,
+                height: rect.height
+            )
+
+            // Position the window to cover just the capture area with some padding for the border
+            let borderWidth: CGFloat = 3
+            let expandedRect = cocoaRect.insetBy(dx: -borderWidth, dy: -borderWidth)
+
+            overlay.setFrame(expandedRect, display: true)
+            overlay.borderView.frame = overlay.contentView?.bounds ?? expandedRect
+            overlay.borderView.captureRect = CGRect(
+                x: borderWidth,
+                y: borderWidth,
+                width: rect.width,
+                height: rect.height
+            )
+            overlay.borderView.needsDisplay = true
+            overlay.orderFront(nil)
         }
-
-        guard let overlay = shared else { return }
-
-        // Convert from Quartz coordinates (origin top-left) to Cocoa coordinates (origin bottom-left)
-        guard let screen = NSScreen.main else { return }
-        let screenHeight = screen.frame.height
-
-        // In Quartz: Y=0 at top, increases downward
-        // In Cocoa: Y=0 at bottom, increases upward
-        let cocoaY = screenHeight - rect.origin.y - rect.height
-
-        let cocoaRect = CGRect(
-            x: rect.origin.x,
-            y: cocoaY,
-            width: rect.width,
-            height: rect.height
-        )
-
-        // Position the window to cover just the capture area with some padding for the border
-        let borderWidth: CGFloat = 3
-        let expandedRect = cocoaRect.insetBy(dx: -borderWidth, dy: -borderWidth)
-
-        overlay.setFrame(expandedRect, display: true)
-        overlay.borderView.frame = overlay.contentView?.bounds ?? expandedRect
-        overlay.borderView.captureRect = CGRect(
-            x: borderWidth,
-            y: borderWidth,
-            width: rect.width,
-            height: rect.height
-        )
-        overlay.borderView.needsDisplay = true
-        overlay.orderFront(nil)
     }
 
     static func hide() {
-        shared?.orderOut(nil)
+        DispatchQueue.main.async {
+            shared?.orderOut(nil)
+        }
+    }
+
+    /// Completely closes and destroys the overlay window
+    static func close() {
+        DispatchQueue.main.async {
+            shared?.orderOut(nil)
+            shared?.close()
+            shared = nil
+        }
     }
 
     static func update(rect: CGRect) {
@@ -59,7 +74,7 @@ final class CaptureAreaOverlay: NSWindow {
         let initialFrame = CGRect(x: 0, y: 0, width: 100, height: 100)
         super.init(
             contentRect: initialFrame,
-            styleMask: .borderless,
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -68,8 +83,12 @@ final class CaptureAreaOverlay: NSWindow {
         backgroundColor = .clear
         ignoresMouseEvents = true  // Click-through
         level = .floating
-        collectionBehavior = [.canJoinAllSpaces, .stationary]
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         hasShadow = false
+        hidesOnDeactivate = false
+
+        // Important: Don't count this window for app termination
+        isReleasedWhenClosed = false
 
         borderView = BorderView(frame: initialFrame)
         contentView = borderView
