@@ -151,6 +151,27 @@ struct ContentView: View {
                 Toggle("Hide Cursor During Capture", isOn: $appModel.hideCursorDuringCapture)
                 Toggle("Sound Effects", isOn: $appModel.soundEnabled)
                 Toggle("Auto-add Unknown Questions", isOn: $appModel.autoAddUnknown)
+                Toggle("Show Capture Area Border", isOn: $appModel.showCaptureOverlay)
+                    .disabled(appModel.selectedCaptureRect == nil)
+            }
+
+            Section("Capture Quality") {
+                Picker("Quality", selection: Binding(
+                    get: { appModel.captureQuality },
+                    set: {
+                        appModel.captureQuality = $0
+                        appModel.saveCaptureQuality()
+                    }
+                )) {
+                    ForEach(CaptureQuality.allCases) { quality in
+                        Text(quality.rawValue).tag(quality)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text(appModel.captureQuality.description)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
 
             Section("OCR Settings") {
@@ -213,7 +234,8 @@ struct ContentView: View {
             }
         }
         .listStyle(.sidebar)
-        .frame(minWidth: 250)
+        .frame(minWidth: 280)
+        .navigationSplitViewColumnWidth(min: 280, ideal: 300, max: 350)
     }
 
     // MARK: - Main Content

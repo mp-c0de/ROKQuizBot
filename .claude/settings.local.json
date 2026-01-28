@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xcodebuild:*)",
+      "Bash(~/Documents/ROKQuizBot/questions.json)",
+      "Bash(python3 -c \"import json; print\\(f''Documents copy now has {len\\(json.load\\(open\\(\"\"$HOME/Documents/ROKQuizBot/questions.json\"\"\\)\\)\\)} questions''\\)\")"
+    ]
+  }
+}

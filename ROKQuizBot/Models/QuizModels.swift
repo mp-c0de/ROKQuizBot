@@ -614,6 +614,32 @@ extension OCRSettings {
     }
 }
 
+// MARK: - Capture Quality
+enum CaptureQuality: String, CaseIterable, Codable, Identifiable {
+    case low = "Low"
+    case medium = "Medium"
+    case best = "Best (Retina)"
+
+    var id: String { rawValue }
+
+    /// Scale factor for capture resolution
+    var scale: CGFloat {
+        switch self {
+        case .low: return 0.5      // Half resolution - faster
+        case .medium: return 1.0   // Standard resolution
+        case .best: return 2.0     // Native Retina - best quality for OCR
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .low: return "Faster capture, lower OCR accuracy"
+        case .medium: return "Balanced speed and quality"
+        case .best: return "Best OCR accuracy, recommended"
+        }
+    }
+}
+
 // MARK: - App Status
 enum AppStatus: Equatable {
     case idle

@@ -26,10 +26,18 @@ final class AppModel {
     var hideCursorDuringCapture: Bool = true
     var soundEnabled: Bool = true
     var autoAddUnknown: Bool = true
+    var showCaptureOverlay: Bool = false {
+        didSet { updateCaptureOverlay() }
+    }
 
     // OCR Settings (user-tunable)
     var ocrSettings: OCRSettings = .default {
         didSet { applyOCRSettings() }
+    }
+
+    // Capture Quality
+    var captureQuality: CaptureQuality = .best {
+        didSet { applyCaptureQuality() }
     }
 
     // Layout configuration
@@ -63,6 +71,7 @@ final class AppModel {
         loadLayoutConfiguration()
         loadSavedCaptureArea()
         loadOCRSettings()
+        loadCaptureQuality()
         setupGlobalHotkey()
     }
 
@@ -100,6 +109,36 @@ final class AppModel {
             ocrSettings = .lightOnDark
         }
         saveOCRSettings()
+    }
+
+    // MARK: - Capture Quality Persistence
+    private let captureQualityKey = "savedCaptureQuality"
+
+    private func loadCaptureQuality() {
+        if let rawValue = UserDefaults.standard.string(forKey: captureQualityKey),
+           let quality = CaptureQuality(rawValue: rawValue) {
+            captureQuality = quality
+            applyCaptureQuality()
+            print("[AppModel] Loaded capture quality: \(quality.rawValue)")
+        }
+    }
+
+    func saveCaptureQuality() {
+        UserDefaults.standard.set(captureQuality.rawValue, forKey: captureQualityKey)
+        print("[AppModel] Saved capture quality: \(captureQuality.rawValue)")
+    }
+
+    private func applyCaptureQuality() {
+        screenCapture.quality = captureQuality
+    }
+
+    // MARK: - Capture Overlay
+    private func updateCaptureOverlay() {
+        if showCaptureOverlay, let rect = selectedCaptureRect {
+            CaptureAreaOverlay.show(rect: rect)
+        } else {
+            CaptureAreaOverlay.hide()
+        }
     }
 
     // MARK: - Capture Area Persistence

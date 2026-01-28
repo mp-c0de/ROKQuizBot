@@ -13,6 +13,29 @@ final class ScreenCaptureService {
     private var stream: SCStream?
     private var streamOutput: PersistentStreamOutput?
     private var isRunning = false
+    private var currentQuality: CaptureQuality = .best
+    private var captureScale: CGFloat = 1.0  // Current scale factor applied to capture
+
+    /// Current capture quality setting
+    var quality: CaptureQuality {
+        get { currentQuality }
+        set {
+            if newValue != currentQuality {
+                currentQuality = newValue
+                // Restart stream with new quality
+                Task {
+                    await restartStream()
+                }
+            }
+        }
+    }
+
+    /// Restarts the stream with current quality setting
+    private func restartStream() async {
+        guard isRunning else { return }
+        await stopStream()
+        try? await startStream()
+    }
 
     // MARK: - Permission Checks
 
@@ -42,13 +65,17 @@ final class ScreenCaptureService {
             throw CaptureError.noDisplayFound
         }
 
-        // Configure stream for full display
+        // Configure stream for full display with quality scaling
+        let screenScale = NSScreen.main?.backingScaleFactor ?? 2.0
+        self.captureScale = currentQuality.scale * (screenScale / 2.0)  // Adjust for screen DPI
+
         let config = SCStreamConfiguration()
-        config.width = mainDisplay.width
-        config.height = mainDisplay.height
+        config.width = Int(CGFloat(mainDisplay.width) * self.captureScale)
+        config.height = Int(CGFloat(mainDisplay.height) * self.captureScale)
         config.pixelFormat = kCVPixelFormatType_32BGRA
         config.showsCursor = false
         config.minimumFrameInterval = CMTime(value: 1, timescale: 60) // 60 FPS max for faster first frame
+        config.scalesToFit = false
 
         // Create filter and stream
         let filter = SCContentFilter(display: mainDisplay, excludingWindows: [])
@@ -110,8 +137,16 @@ final class ScreenCaptureService {
             return nil
         }
 
-        // Crop to the requested rect
-        return fullImage.cropping(to: rect)
+        // Scale the cropping rect to match the capture resolution
+        let scaledRect = CGRect(
+            x: rect.origin.x * captureScale,
+            y: rect.origin.y * captureScale,
+            width: rect.width * captureScale,
+            height: rect.height * captureScale
+        )
+
+        // Crop to the scaled rect
+        return fullImage.cropping(to: scaledRect)
     }
 
     // MARK: - Errors
