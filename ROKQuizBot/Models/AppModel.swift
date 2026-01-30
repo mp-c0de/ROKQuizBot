@@ -833,6 +833,10 @@ final class AppModel {
             .replacingOccurrences(of: " and ", with: ", ")
             .replacingOccurrences(of: " & ", with: ", ")
             .replacingOccurrences(of: "  ", with: " ")
+            .replacingOccurrences(of: "\"", with: "")  // Remove straight quotes
+            .replacingOccurrences(of: "'", with: "")   // Remove single quotes
+            .replacingOccurrences(of: "\u{201C}", with: "")  // Remove left smart quote "
+            .replacingOccurrences(of: "\u{201D}", with: "")  // Remove right smart quote "
             .trimmingCharacters(in: .whitespaces)
     }
 
