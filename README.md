@@ -54,6 +54,7 @@ Made by mpcode
 3. **Answer Questions**: Press `0` when you see a question - the app will instantly capture, find the answer, and click it
 
 4. **Settings**:
+   - **Auto-Click Answer**: Automatically click the answer when found (disable to just view the answer)
    - **Hide Cursor**: Hide cursor during capture to avoid blocking text
    - **Sound Effects**: Play sound when answering a question
    - **Auto-add Unknown**: Automatically save unrecognised questions

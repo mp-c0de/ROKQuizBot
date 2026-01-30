@@ -161,6 +161,7 @@ struct ContentView: View {
             }
 
             Section("Settings") {
+                Toggle("Auto-Click Answer", isOn: $appModel.autoClickEnabled)
                 Toggle("Hide Cursor During Capture", isOn: $appModel.hideCursorDuringCapture)
                 Toggle("Sound Effects", isOn: $appModel.soundEnabled)
                 Toggle("Auto-add Unknown Questions", isOn: $appModel.autoAddUnknown)

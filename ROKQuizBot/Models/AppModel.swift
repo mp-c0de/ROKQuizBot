@@ -30,6 +30,7 @@ final class AppModel {
     var soundEnabled: Bool = true
     var autoAddUnknown: Bool = true
     var showCaptureOverlay: Bool = false
+    var autoClickEnabled: Bool = true  // Auto-click the answer when found
 
     // OCR Settings (user-tunable)
     var ocrSettings: OCRSettings = .default {
@@ -534,19 +535,21 @@ final class AppModel {
                     detectedAnswers: cleanedAnswers,
                     layout: layout
                 ) {
-                    // Click the centre of the matching answer zone
-                    try await Task.sleep(nanoseconds: UInt64(clickDelay * 1_000_000_000))
+                    // Click the centre of the matching answer zone (if auto-click enabled)
+                    if autoClickEnabled {
+                        try await Task.sleep(nanoseconds: UInt64(clickDelay * 1_000_000_000))
 
-                    let clickPoint = matchingZone.clickPoint(in: captureRect)
-                    mouseController.click(at: clickPoint, moveAwayAfter: false)
+                        let clickPoint = matchingZone.clickPoint(in: captureRect)
+                        mouseController.click(at: clickPoint, moveAwayAfter: false)
 
-                    // Move cursor completely outside the capture area (below it)
-                    usleep(30000) // 30ms delay
-                    let awayPoint = CGPoint(
-                        x: captureRect.midX,
-                        y: captureRect.maxY + 50  // 50 pixels below the capture area
-                    )
-                    mouseController.moveTo(awayPoint)
+                        // Move cursor completely outside the capture area (below it)
+                        usleep(30000) // 30ms delay
+                        let awayPoint = CGPoint(
+                            x: captureRect.midX,
+                            y: captureRect.maxY + 50  // 50 pixels below the capture area
+                        )
+                        mouseController.moveTo(awayPoint)
+                    }
 
                     // Display the answer - include detected text if answer is a letter
                     let answerUpper = match.question.answer.uppercased()
@@ -661,18 +664,20 @@ final class AppModel {
                     in: ocrResult,
                     captureRect: captureRect
                 ) {
-                    // Click on the answer
-                    try await Task.sleep(nanoseconds: UInt64(clickDelay * 1_000_000_000))
+                    // Click on the answer (if auto-click enabled)
+                    if autoClickEnabled {
+                        try await Task.sleep(nanoseconds: UInt64(clickDelay * 1_000_000_000))
 
-                    mouseController.click(at: answerLocation.clickPoint, moveAwayAfter: false)
+                        mouseController.click(at: answerLocation.clickPoint, moveAwayAfter: false)
 
-                    // Move cursor completely outside the capture area (below it)
-                    usleep(30000) // 30ms delay
-                    let awayPoint = CGPoint(
-                        x: captureRect.midX,
-                        y: captureRect.maxY + 50  // 50 pixels below the capture area
-                    )
-                    mouseController.moveTo(awayPoint)
+                        // Move cursor completely outside the capture area (below it)
+                        usleep(30000) // 30ms delay
+                        let awayPoint = CGPoint(
+                            x: captureRect.midX,
+                            y: captureRect.maxY + 50  // 50 pixels below the capture area
+                        )
+                        mouseController.moveTo(awayPoint)
+                    }
 
                     lastClickedAnswer = match.question.answer
                     answeredCount += 1
