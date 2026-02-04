@@ -14,6 +14,61 @@ final class OCRService {
     /// Current OCR settings - can be adjusted by user
     var settings: OCRSettings = .default
 
+    /// Configures a VNRecognizeTextRequest with optimal settings for game quiz text.
+    private func configureRequest(_ request: VNRecognizeTextRequest, useLanguageCorrection: Bool = true) {
+        request.recognitionLevel = .accurate
+        request.revision = VNRecognizeTextRequestRevision3
+        request.recognitionLanguages = ["en-GB", "en-US"]
+        request.usesLanguageCorrection = useLanguageCorrection
+        request.minimumTextHeight = 0.01
+        request.customWords = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+    }
+
+    /// Picks the best candidate from an observation by checking multiple candidates.
+    private func bestCandidate(from observation: VNRecognizedTextObservation) -> VNRecognizedText? {
+        let candidates = observation.topCandidates(3)
+        return candidates.max(by: { $0.confidence < $1.confidence })
+    }
+
+    /// Runs OCR on a CGImage with the given configuration.
+    private func performOCR(on image: CGImage, useLanguageCorrection: Bool) async throws -> String {
+        return try await withCheckedThrowingContinuation { continuation in
+            let request = VNRecognizeTextRequest { request, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+
+                guard let observations = request.results as? [VNRecognizedTextObservation] else {
+                    continuation.resume(returning: "")
+                    return
+                }
+
+                let text = observations.compactMap { self.bestCandidate(from: $0)?.string }.joined(separator: " ")
+                continuation.resume(returning: text.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+
+            self.configureRequest(request, useLanguageCorrection: useLanguageCorrection)
+
+            let handler = VNImageRequestHandler(cgImage: image, options: [:])
+
+            do {
+                try handler.perform([request])
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+
+    /// Inverts the colours of a CGImage (white-on-gold → dark-on-blue).
+    private func invertImage(_ image: CGImage) -> CGImage? {
+        let ci = CIImage(cgImage: image)
+        guard let filter = CIFilter(name: "CIColorInvert") else { return nil }
+        filter.setValue(ci, forKey: kCIInputImageKey)
+        guard let output = filter.outputImage else { return nil }
+        return ciContext.createCGImage(output, from: output.extent)
+    }
+
     /// Preprocesses an image to improve OCR accuracy based on current settings.
     private func preprocessImage(_ image: CGImage, forRegion isSmallRegion: Bool = false) -> CGImage {
         var ciImage = CIImage(cgImage: image)
@@ -72,7 +127,6 @@ final class OCRService {
 
         // Step 6: Apply binarization (threshold to black/white) if enabled
         if settings.binarizationEnabled {
-            // Use CIColorThresholdOtsu for automatic threshold, or manual threshold
             if let filter = CIFilter(name: "CIColorThreshold") {
                 filter.setValue(ciImage, forKey: kCIInputImageKey)
                 filter.setValue(settings.binarizationThreshold, forKey: "inputThreshold")
@@ -113,7 +167,7 @@ final class OCRService {
                 var fullTextParts: [String] = []
 
                 for observation in observations {
-                    guard let candidate = observation.topCandidates(1).first else { continue }
+                    guard let candidate = self.bestCandidate(from: observation) else { continue }
 
                     let text = candidate.string
                     fullTextParts.append(text)
@@ -131,11 +185,7 @@ final class OCRService {
                 continuation.resume(returning: OCRResult(fullText: fullText, textBlocks: textBlocks))
             }
 
-            // Configure recognition - use accurate mode for better text recognition
-            // Preprocessing helps with speed, so we can afford accurate mode
-            request.recognitionLevel = .accurate
-            request.recognitionLanguages = ["en-GB", "en-US"]
-            request.usesLanguageCorrection = true  // Helps with character recognition
+            self.configureRequest(request)
 
             let handler = VNImageRequestHandler(cgImage: processedImage, options: [:])
 
@@ -158,65 +208,36 @@ final class OCRService {
     // MARK: - Zone-Specific OCR
 
     /// Recognises text in a specific normalised region of the image.
-    /// - Parameters:
-    ///   - image: The full CGImage to process.
-    ///   - normalizedRegion: The region to OCR, in normalised coordinates (0-1).
-    /// - Returns: The recognised text from that region.
     func recogniseTextInRegion(of image: CGImage, normalizedRegion: CGRect) async throws -> String {
-        // Crop the image to the specified region
+        let processedImage = cropAndPreprocess(image: image, normalizedRegion: normalizedRegion)
+        guard let processedImage else { return "" }
+        return try await performOCR(on: processedImage, useLanguageCorrection: true)
+    }
+
+    /// Crops and preprocesses a region of the image.
+    private func cropAndPreprocess(image: CGImage, normalizedRegion: CGRect) -> CGImage? {
+        guard let cropped = cropRegion(image: image, normalizedRegion: normalizedRegion) else { return nil }
+        let pixelWidth = Int(normalizedRegion.width * CGFloat(image.width))
+        let pixelHeight = Int(normalizedRegion.height * CGFloat(image.height))
+        let isSmallRegion = pixelWidth < settings.minRegionSize || pixelHeight < settings.minRegionSize
+        return preprocessImage(cropped, forRegion: isSmallRegion)
+    }
+
+    /// Crops a region without any preprocessing (raw pixel data).
+    private func cropRegion(image: CGImage, normalizedRegion: CGRect) -> CGImage? {
         let pixelX = Int(normalizedRegion.origin.x * CGFloat(image.width))
         let pixelY = Int(normalizedRegion.origin.y * CGFloat(image.height))
         let pixelWidth = Int(normalizedRegion.width * CGFloat(image.width))
         let pixelHeight = Int(normalizedRegion.height * CGFloat(image.height))
 
         let cropRect = CGRect(x: pixelX, y: pixelY, width: pixelWidth, height: pixelHeight)
-
-        guard let croppedImage = image.cropping(to: cropRect) else {
-            return ""
-        }
-
-        // Determine if this is a small region that should be scaled up
-        let isSmallRegion = pixelWidth < settings.minRegionSize || pixelHeight < settings.minRegionSize
-
-        // Preprocess with scaling for small regions
-        let processedImage = preprocessImage(croppedImage, forRegion: isSmallRegion)
-
-        // Perform OCR on the preprocessed cropped image
-        return try await withCheckedThrowingContinuation { continuation in
-            let request = VNRecognizeTextRequest { request, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                    return
-                }
-
-                guard let observations = request.results as? [VNRecognizedTextObservation] else {
-                    continuation.resume(returning: "")
-                    return
-                }
-
-                let text = observations.compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
-                continuation.resume(returning: text.trimmingCharacters(in: .whitespacesAndNewlines))
-            }
-
-            request.recognitionLevel = .accurate
-            request.recognitionLanguages = ["en-GB", "en-US"]
-            request.usesLanguageCorrection = true
-
-            let handler = VNImageRequestHandler(cgImage: processedImage, options: [:])
-
-            do {
-                try handler.perform([request])
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
+        return image.cropping(to: cropRect)
     }
 
     /// Recognises text in all zones defined by the layout configuration.
-    /// - Parameters:
-    ///   - image: The full CGImage to process.
-    ///   - layout: The quiz layout configuration defining zones.
-    /// - Returns: A tuple containing the question text and a dictionary of answer labels to their text.
+    /// Uses a two-pass approach for answer zones:
+    /// 1. Normal preprocessed image with language correction
+    /// 2. Inverted raw image for zones that fail (Vision reads dark-on-light text much better)
     func recogniseZones(in image: CGImage, layout: QuizLayoutConfiguration) async throws -> (question: String, answers: [String: String]) {
         var questionText = ""
         var answers: [String: String] = [:]
@@ -226,7 +247,7 @@ final class OCRService {
             questionText = try await recogniseTextInRegion(of: image, normalizedRegion: questionZone.normalizedRect)
         }
 
-        // OCR each answer zone concurrently
+        // Pass 1: OCR each answer zone concurrently (preprocessed + language correction ON)
         await withTaskGroup(of: (String, String).self) { group in
             for zone in layout.answerZones {
                 group.addTask {
@@ -244,6 +265,56 @@ final class OCRService {
             }
         }
 
+        // Pass 2: For suspicious zones, retry with inverted raw image.
+        // Vision struggles with white/light text on coloured backgrounds but reads
+        // inverted (dark text on light background) much more reliably.
+        var invertedZones: [(label: String, invertedImage: CGImage)] = []
+        for zone in layout.answerZones {
+            let text = answers[zone.label] ?? ""
+            let cleaned = stripLabelPrefix(text, label: zone.label)
+            let isSuspicious = cleaned.isEmpty
+                || cleaned.caseInsensitiveCompare(zone.label) == .orderedSame
+
+            if isSuspicious,
+               let rawImg = cropRegion(image: image, normalizedRegion: zone.normalizedRect),
+               let inverted = invertImage(rawImg) {
+                invertedZones.append((zone.label, inverted))
+            }
+        }
+
+        if !invertedZones.isEmpty {
+            await withTaskGroup(of: (String, String)?.self) { group in
+                for (label, invertedImage) in invertedZones {
+                    group.addTask {
+                        do {
+                            let text = try await self.performOCR(on: invertedImage, useLanguageCorrection: true)
+                            let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !cleaned.isEmpty && cleaned.caseInsensitiveCompare(label) != .orderedSame {
+                                return (label, text)
+                            }
+                        } catch {}
+                        return nil
+                    }
+                }
+
+                for await result in group {
+                    if let (label, text) = result {
+                        answers[label] = text
+                    }
+                }
+            }
+        }
+
         return (question: questionText, answers: answers)
+    }
+
+    /// Strips a leading label prefix from OCR text (e.g., "D 3" → "3" for label "D").
+    private func stripLabelPrefix(_ text: String, label: String) -> String {
+        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefixPattern = "^\(label)\\s+"
+        if let range = cleaned.range(of: prefixPattern, options: [.regularExpression, .caseInsensitive]) {
+            cleaned = String(cleaned[range.upperBound...])
+        }
+        return cleaned
     }
 }

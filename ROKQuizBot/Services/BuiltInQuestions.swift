@@ -279,7 +279,7 @@ enum BuiltInQuestions {
         "which commander is reputed to have said, \"i came, i saw, i conquered\"?": "Julius Caesar",
         "which of these actions can be performed by alliance leaders and titled officers, but not non-titled officers?": "Sign up for Ark of Osiris",
         "using a troop led by julius caesar and cleopatra vii, which of the following actions will unlock the achievement \"immortal longings\"?": "Attack a city",
-        "in rok, which commander has the title \"beloved of thoth\"?": "Imhotep",
+        "in rok, which commander has the title \"beloved of thoth\"?": "Thutmose III",
         "which of these characters is from \"twenty thousand leagues under the seas\"?": "Captain Nemo",
         "who wrote alice's adventures in wonderland?": "Lewis Carroll",
         "who was the father of hannibal?": "Hamilcar Barca",
