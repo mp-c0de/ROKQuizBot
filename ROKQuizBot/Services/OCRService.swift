@@ -14,6 +14,12 @@ final class OCRService {
     /// Current OCR settings - can be adjusted by user
     var settings: OCRSettings = .default
 
+    /// When true, saves debug images and OCR results for each zone to disk
+    var debugMode: Bool = false
+
+    /// Path where debug images were last saved
+    private(set) var lastDebugOutputPath: String?
+
     /// Configures a VNRecognizeTextRequest with optimal settings for game quiz text.
     private func configureRequest(_ request: VNRecognizeTextRequest, useLanguageCorrection: Bool = true) {
         request.recognitionLevel = .accurate
@@ -235,9 +241,10 @@ final class OCRService {
     }
 
     /// Recognises text in all zones defined by the layout configuration.
-    /// Uses a two-pass approach for answer zones:
+    /// Uses a three-pass approach for answer zones:
     /// 1. Normal preprocessed image with language correction
-    /// 2. Inverted raw image for zones that fail (Vision reads dark-on-light text much better)
+    /// 2. Inverted raw image for zones that fail
+    /// 3. Inverted + binarized for zones still failing (best for low-contrast left-side zones)
     func recogniseZones(in image: CGImage, layout: QuizLayoutConfiguration) async throws -> (question: String, answers: [String: String]) {
         var questionText = ""
         var answers: [String: String] = [:]
@@ -268,53 +275,341 @@ final class OCRService {
         // Pass 2: For suspicious zones, retry with inverted raw image.
         // Vision struggles with white/light text on coloured backgrounds but reads
         // inverted (dark text on light background) much more reliably.
-        var invertedZones: [(label: String, invertedImage: CGImage)] = []
-        for zone in layout.answerZones {
-            let text = answers[zone.label] ?? ""
-            let cleaned = stripLabelPrefix(text, label: zone.label)
-            let isSuspicious = cleaned.isEmpty
-                || cleaned.caseInsensitiveCompare(zone.label) == .orderedSame
+        let pass2Zones = suspiciousZones(from: layout.answerZones, answers: answers)
 
-            if isSuspicious,
-               let rawImg = cropRegion(image: image, normalizedRegion: zone.normalizedRect),
-               let inverted = invertImage(rawImg) {
-                invertedZones.append((zone.label, inverted))
+        if !pass2Zones.isEmpty {
+            var invertedZones: [(label: String, invertedImage: CGImage)] = []
+            for zone in pass2Zones {
+                if let rawImg = cropRegion(image: image, normalizedRegion: zone.normalizedRect),
+                   let inverted = invertImage(rawImg) {
+                    invertedZones.append((zone.label, inverted))
+                }
+            }
+
+            if !invertedZones.isEmpty {
+                await withTaskGroup(of: (String, String)?.self) { group in
+                    for (label, invertedImage) in invertedZones {
+                        group.addTask {
+                            do {
+                                let text = try await self.performOCR(on: invertedImage, useLanguageCorrection: true)
+                                let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                                if !cleaned.isEmpty && cleaned.caseInsensitiveCompare(label) != .orderedSame {
+                                    return (label, text)
+                                }
+                            } catch {}
+                            return nil
+                        }
+                    }
+
+                    for await result in group {
+                        if let (label, text) = result {
+                            answers[label] = text
+                        }
+                    }
+                }
             }
         }
 
-        if !invertedZones.isEmpty {
-            await withTaskGroup(of: (String, String)?.self) { group in
-                for (label, invertedImage) in invertedZones {
-                    group.addTask {
-                        do {
-                            let text = try await self.performOCR(on: invertedImage, useLanguageCorrection: true)
-                            let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if !cleaned.isEmpty && cleaned.caseInsensitiveCompare(label) != .orderedSame {
-                                return (label, text)
-                            }
-                        } catch {}
-                        return nil
-                    }
-                }
+        // Pass 3: For zones STILL suspicious, try inverted + binarized.
+        // Uses aggressive contrast/brightness to wash out background texture before
+        // binarizing, then strips OCR artefacts from the result.
+        let pass3Zones = suspiciousZones(from: layout.answerZones, answers: answers)
 
-                for await result in group {
-                    if let (label, text) = result {
-                        answers[label] = text
+        if !pass3Zones.isEmpty {
+            var invertedBinarizedZones: [(label: String, processedImage: CGImage)] = []
+            for zone in pass3Zones {
+                if let rawImg = cropRegion(image: image, normalizedRegion: zone.normalizedRect),
+                   let inverted = invertImage(rawImg) {
+                    let pixelWidth = Int(zone.normalizedRect.width * CGFloat(image.width))
+                    let pixelHeight = Int(zone.normalizedRect.height * CGFloat(image.height))
+                    let isSmall = pixelWidth < settings.minRegionSize || pixelHeight < settings.minRegionSize
+                    let scale = isSmall ? settings.scaleFactor : 1.0
+
+                    // Aggressive settings: high contrast + brightness to nuke background texture
+                    if let processed = applyFilters(inverted, grayscale: true, contrast: 3.5, brightness: 0.3, binarize: true, threshold: 0.6, scaleFactor: scale) {
+                        invertedBinarizedZones.append((zone.label, processed))
                     }
                 }
             }
+
+            if !invertedBinarizedZones.isEmpty {
+                await withTaskGroup(of: (String, String)?.self) { group in
+                    for (label, processedImage) in invertedBinarizedZones {
+                        group.addTask {
+                            do {
+                                // Language correction ON — with aggressive image processing it
+                                // produces clean results (e.g. "3" not ",на•. 3 Ti...")
+                                let text = try await self.performOCR(on: processedImage, useLanguageCorrection: true)
+                                let cleaned = self.cleanPass3Result(text, label: label)
+                                if !cleaned.isEmpty && cleaned.caseInsensitiveCompare(label) != .orderedSame {
+                                    return (label, cleaned)
+                                }
+                            } catch {}
+                            return nil
+                        }
+                    }
+
+                    for await result in group {
+                        if let (label, text) = result {
+                            answers[label] = text
+                        }
+                    }
+                }
+            }
+        }
+
+        // Save debug images if enabled
+        if debugMode {
+            await saveDebugImages(for: layout.answerZones, from: image)
         }
 
         return (question: questionText, answers: answers)
     }
 
+    /// Returns answer zones whose OCR result is empty or just the label letter.
+    private func suspiciousZones(from zones: [LayoutZone], answers: [String: String]) -> [LayoutZone] {
+        zones.filter { zone in
+            let text = answers[zone.label] ?? ""
+            let cleaned = stripLabelPrefix(text, label: zone.label)
+            return cleaned.isEmpty || cleaned.caseInsensitiveCompare(zone.label) == .orderedSame
+        }
+    }
+
+    /// Cleans OCR output from pass 3 (inverted+binarized) which often contains
+    /// artefact characters from background texture being binarized.
+    /// e.g. "3 •557..." → "3", "5 i detests" → "5"
+    nonisolated private func cleanPass3Result(_ text: String, label: String) -> String {
+        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Strip the label prefix first (e.g. "A 3" → "3")
+        cleaned = stripLabelPrefix(cleaned, label: label)
+
+        // Remove bullet characters and common OCR noise symbols
+        let noiseChars = CharacterSet(charactersIn: "•·○●◦▪▸►◆■□△▽※†‡§¶~`|\\")
+        cleaned = cleaned.components(separatedBy: noiseChars).joined()
+
+        // Remove sequences of 2+ dots/periods
+        cleaned = cleaned.replacingOccurrences(of: #"\.{2,}"#, with: "", options: .regularExpression)
+
+        // Remove trailing noise: anything after and including a lone dot/bullet sequence
+        // This catches patterns like "3 557" from "3 •557..."
+        // Strategy: keep text up to the first suspicious break
+        // A "suspicious break" is a space followed by characters that don't look like real answer text
+        // (e.g., strings of digits with no letters, or gibberish)
+
+        // Split into words and keep only the leading meaningful portion
+        let words = cleaned.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        var meaningful: [String] = []
+        for word in words {
+            let alphanumeric = word.filter { $0.isLetter || $0.isNumber }
+            // Skip words that are empty after removing noise
+            if alphanumeric.isEmpty { continue }
+            // Skip single-character words that aren't real (but allow "a", "I", and digits)
+            if alphanumeric.count == 1 {
+                let ch = alphanumeric.lowercased()
+                if ch == "a" || ch == "i" || alphanumeric.first?.isNumber == true {
+                    meaningful.append(alphanumeric)
+                    continue
+                }
+                // Single noise letter — stop here, rest is likely artefacts
+                break
+            }
+            // Skip words that are mostly digits mixed with letters (e.g. "557T", "7drit")
+            // but allow pure numbers and pure words
+            let digitCount = alphanumeric.filter { $0.isNumber }.count
+            let letterCount = alphanumeric.filter { $0.isLetter }.count
+            if digitCount > 0 && letterCount > 0 && alphanumeric.count <= 5 {
+                // Mixed short gibberish — likely noise, stop
+                break
+            }
+            meaningful.append(word)
+        }
+
+        cleaned = meaningful.joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return cleaned
+    }
+
     /// Strips a leading label prefix from OCR text (e.g., "D 3" → "3" for label "D").
-    private func stripLabelPrefix(_ text: String, label: String) -> String {
+    nonisolated private func stripLabelPrefix(_ text: String, label: String) -> String {
         var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let prefixPattern = "^\(label)\\s+"
         if let range = cleaned.range(of: prefixPattern, options: [.regularExpression, .caseInsensitive]) {
             cleaned = String(cleaned[range.upperBound...])
         }
         return cleaned
+    }
+
+    // MARK: - Debug Image Saving
+
+    /// Saves multiple processed image variants and OCR results for each answer zone.
+    /// Creates ~/Documents/ROKQuizBot/debug/ with images and a text report.
+    private func saveDebugImages(for zones: [LayoutZone], from image: CGImage) async {
+        let debugDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents/ROKQuizBot/debug")
+
+        // Clear previous debug output
+        try? FileManager.default.removeItem(at: debugDir)
+        try? FileManager.default.createDirectory(at: debugDir, withIntermediateDirectories: true)
+
+        var report = "OCR Debug Report\n"
+        report += "Generated: \(Date())\n"
+        report += "Image size: \(image.width) x \(image.height)\n"
+        report += "Current settings: contrast=\(settings.contrast), brightness=\(settings.brightness), "
+        report += "grayscale=\(settings.grayscaleEnabled), invert=\(settings.invertColors), "
+        report += "scale=\(settings.scaleFactor), binarize=\(settings.binarizationEnabled) (threshold=\(settings.binarizationThreshold))\n"
+        report += String(repeating: "=", count: 80) + "\n\n"
+
+        for zone in zones {
+            let label = zone.label
+            report += "Zone \(label):\n"
+            report += "  Normalised rect: \(zone.normalizedRect)\n"
+
+            guard let rawCropped = cropRegion(image: image, normalizedRegion: zone.normalizedRect) else {
+                report += "  ERROR: Failed to crop region\n\n"
+                continue
+            }
+
+            let pixelWidth = Int(zone.normalizedRect.width * CGFloat(image.width))
+            let pixelHeight = Int(zone.normalizedRect.height * CGFloat(image.height))
+            report += "  Pixel size: \(pixelWidth) x \(pixelHeight)\n\n"
+
+            // Generate all 7 image variants
+            let variants: [(name: String, image: CGImage)] = generateVariants(
+                rawCropped: rawCropped,
+                label: label,
+                pixelWidth: pixelWidth,
+                pixelHeight: pixelHeight
+            )
+
+            // Save each variant and run OCR
+            for (name, variantImage) in variants {
+                let filename = "\(label)_\(name).png"
+                savePNG(variantImage, to: debugDir.appendingPathComponent(filename))
+
+                // Run OCR with and without language correction
+                let ocrWithLC = (try? await performOCR(on: variantImage, useLanguageCorrection: true)) ?? "(error)"
+                let ocrNoLC = (try? await performOCR(on: variantImage, useLanguageCorrection: false)) ?? "(error)"
+
+                report += "  \(filename):\n"
+                report += "    With lang correction:    \"\(ocrWithLC)\"\n"
+                report += "    Without lang correction:  \"\(ocrNoLC)\"\n"
+            }
+
+            report += "\n"
+        }
+
+        // Write report
+        let reportURL = debugDir.appendingPathComponent("debug_results.txt")
+        try? report.write(to: reportURL, atomically: true, encoding: .utf8)
+
+        lastDebugOutputPath = debugDir.path
+        print("[OCRService] Debug output saved to: \(debugDir.path)")
+    }
+
+    /// Generates 7 image variants for a raw cropped zone image.
+    private func generateVariants(rawCropped: CGImage, label: String, pixelWidth: Int, pixelHeight: Int) -> [(name: String, image: CGImage)] {
+        var variants: [(String, CGImage)] = []
+
+        // 1. Raw cropped, no processing
+        variants.append(("1_raw", rawCropped))
+
+        // 2. Current settings pipeline (preprocessImage)
+        let isSmall = pixelWidth < settings.minRegionSize || pixelHeight < settings.minRegionSize
+        let preprocessed = preprocessImage(rawCropped, forRegion: isSmall)
+        variants.append(("2_preprocessed", preprocessed))
+
+        // 3. Just colour inversion on raw crop
+        if let inverted = invertImage(rawCropped) {
+            variants.append(("3_inverted_raw", inverted))
+        }
+
+        // 4. Inversion then full pipeline
+        if let inverted = invertImage(rawCropped) {
+            let invertedPreprocessed = preprocessImage(inverted, forRegion: isSmall)
+            variants.append(("4_inverted_preprocessed", invertedPreprocessed))
+        }
+
+        // 5. High contrast: grayscale + contrast 3.0 + brightness 0.2
+        if let highContrast = applyFilters(rawCropped, grayscale: true, contrast: 3.0, brightness: 0.2, scaleFactor: isSmall ? settings.scaleFactor : 1.0) {
+            variants.append(("5_highcontrast", highContrast))
+        }
+
+        // 6. Binarized at 0.5 threshold
+        if let binarized = applyFilters(rawCropped, grayscale: true, contrast: 2.0, brightness: 0.1, binarize: true, threshold: 0.5, scaleFactor: isSmall ? settings.scaleFactor : 1.0) {
+            variants.append(("6_binarized", binarized))
+        }
+
+        // 7. Inverted then binarized (old: contrast 2.0, brightness 0.1, threshold 0.5)
+        if let inverted = invertImage(rawCropped),
+           let invertedBinarized = applyFilters(inverted, grayscale: true, contrast: 2.0, brightness: 0.1, binarize: true, threshold: 0.5, scaleFactor: isSmall ? settings.scaleFactor : 1.0) {
+            variants.append(("7_inverted_binarized_old", invertedBinarized))
+        }
+
+        // 8. Inverted then binarized AGGRESSIVE (pass 3 settings: contrast 3.5, brightness 0.3, threshold 0.6)
+        if let inverted = invertImage(rawCropped),
+           let invertedBinarizedAggressive = applyFilters(inverted, grayscale: true, contrast: 3.5, brightness: 0.3, binarize: true, threshold: 0.6, scaleFactor: isSmall ? settings.scaleFactor : 1.0) {
+            variants.append(("8_inverted_binarized_aggressive", invertedBinarizedAggressive))
+        }
+
+        return variants
+    }
+
+    /// Applies a custom set of CIFilters to a CGImage and returns the result.
+    private func applyFilters(
+        _ image: CGImage,
+        grayscale: Bool = false,
+        contrast: Double = 1.0,
+        brightness: Double = 0.0,
+        binarize: Bool = false,
+        threshold: Double = 0.5,
+        scaleFactor: Double = 1.0
+    ) -> CGImage? {
+        var ci = CIImage(cgImage: image)
+
+        // Scale
+        if scaleFactor > 1.0 {
+            ci = ci.transformed(by: CGAffineTransform(scaleX: scaleFactor, y: scaleFactor))
+        }
+
+        // Grayscale
+        if grayscale {
+            if let f = CIFilter(name: "CIColorMonochrome") {
+                f.setValue(ci, forKey: kCIInputImageKey)
+                f.setValue(CIColor(red: 0.7, green: 0.7, blue: 0.7), forKey: "inputColor")
+                f.setValue(1.0, forKey: "inputIntensity")
+                if let out = f.outputImage { ci = out }
+            }
+        }
+
+        // Contrast + brightness
+        if contrast != 1.0 || brightness != 0.0 {
+            if let f = CIFilter(name: "CIColorControls") {
+                f.setValue(ci, forKey: kCIInputImageKey)
+                f.setValue(contrast, forKey: kCIInputContrastKey)
+                f.setValue(brightness, forKey: kCIInputBrightnessKey)
+                f.setValue(grayscale ? 0.0 : 1.0, forKey: kCIInputSaturationKey)
+                if let out = f.outputImage { ci = out }
+            }
+        }
+
+        // Binarize
+        if binarize {
+            if let f = CIFilter(name: "CIColorThreshold") {
+                f.setValue(ci, forKey: kCIInputImageKey)
+                f.setValue(threshold, forKey: "inputThreshold")
+                if let out = f.outputImage { ci = out }
+            }
+        }
+
+        return ciContext.createCGImage(ci, from: ci.extent)
+    }
+
+    /// Saves a CGImage as PNG to disk.
+    private func savePNG(_ image: CGImage, to url: URL) {
+        let rep = NSBitmapImageRep(cgImage: image)
+        guard let data = rep.representation(using: .png, properties: [:]) else { return }
+        try? data.write(to: url)
     }
 }

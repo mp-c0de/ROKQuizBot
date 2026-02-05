@@ -20,6 +20,11 @@ final class AppModel {
     var questionsLoaded: Int = 0
     var answeredCount: Int = 0
     var unknownCount: Int = 0
+    var isAIProcessing: Bool = false
+
+    // Stored from last OCR pass so key 9 can use them
+    var lastDetectedAnswers: [String: String] = [:]  // zone label → text
+    var lastQuestionText: String = ""
 
     // Track if capture area is unsaved (not associated with a layout)
     var hasUnsavedCaptureArea: Bool = false
@@ -31,6 +36,8 @@ final class AppModel {
     var autoAddUnknown: Bool = true
     var showCaptureOverlay: Bool = false
     var autoClickEnabled: Bool = true  // Auto-click the answer when found
+    var ocrDebugMode: Bool = false  // Save debug images on next capture
+    var lastDebugOutputPath: String? = nil  // Path where debug images were last saved
 
     // OCR Settings (user-tunable)
     var ocrSettings: OCRSettings = .default {
@@ -510,8 +517,19 @@ final class AppModel {
     @MainActor
     private func processWithLayout(cgImage: CGImage, layout: QuizLayoutConfiguration, captureRect: CGRect) async {
         do {
+            // Pass debug mode flag to OCR service
+            ocrService.debugMode = ocrDebugMode
+
             // OCR each zone separately
             let zoneResults = try await ocrService.recogniseZones(in: cgImage, layout: layout)
+
+            // Capture debug output path and reset flag
+            if ocrDebugMode {
+                lastDebugOutputPath = ocrService.lastDebugOutputPath
+                ocrDebugMode = false
+                print("[AppModel] Debug images saved to: \(lastDebugOutputPath ?? "unknown")")
+            }
+            ocrService.debugMode = false
 
             let questionText = cleanQuestionText(zoneResults.question)
 
@@ -521,6 +539,10 @@ final class AppModel {
                 cleanedAnswers[label] = cleanAnswerText(text, label: label)
             }
 
+            // Store for AI fallback (key 9)
+            lastDetectedAnswers = cleanedAnswers
+            lastQuestionText = questionText
+
             // Display text - sorted by label (A, B, C, D)
             let sortedLabels = ["A", "B", "C", "D"].filter { cleanedAnswers[$0] != nil }
             lastOCRText = "Q: \(questionText)\n" + sortedLabels.map { "\($0): \(cleanedAnswers[$0] ?? "")" }.joined(separator: "\n")
@@ -529,12 +551,23 @@ final class AppModel {
             if let match = questionDatabase.findBestMatch(for: questionText) {
                 lastMatchedQuestion = match.question
 
-                // Find which answer zone matches the correct answer
-                if let matchingZone = findMatchingAnswerZone(
-                    correctAnswer: match.question.answer,
-                    detectedAnswers: cleanedAnswers,
-                    layout: layout
-                ) {
+                // Try each answer (pipe-separated) until one matches a detected zone
+                var matchingZone: LayoutZone? = nil
+                var usedAnswer: String = match.question.primaryAnswer
+
+                for candidate in match.question.allAnswers {
+                    if let zone = findMatchingAnswerZone(
+                        correctAnswer: candidate,
+                        detectedAnswers: cleanedAnswers,
+                        layout: layout
+                    ) {
+                        matchingZone = zone
+                        usedAnswer = candidate
+                        break
+                    }
+                }
+
+                if let matchingZone = matchingZone {
                     // Click the centre of the matching answer zone (if auto-click enabled)
                     if autoClickEnabled {
                         try await Task.sleep(nanoseconds: UInt64(clickDelay * 1_000_000_000))
@@ -552,18 +585,22 @@ final class AppModel {
                     }
 
                     // Display the answer - include detected text if answer is a letter
-                    let answerUpper = match.question.answer.uppercased()
+                    let answerUpper = usedAnswer.uppercased()
                     if ["A", "B", "C", "D"].contains(answerUpper),
                        let detectedText = cleanedAnswers[answerUpper], !detectedText.isEmpty {
                         lastClickedAnswer = "\(answerUpper) (\(detectedText))"
                     } else {
-                        lastClickedAnswer = match.question.answer
+                        lastClickedAnswer = usedAnswer
                     }
                     answeredCount += 1
 
                     if soundEnabled {
                         NSSound(named: NSSound.Name("Pop"))?.play()
                     }
+                } else {
+                    // Question matched but no answer matched any zone
+                    print("[AppModel] Question matched but none of the answers [\(match.question.allAnswers.joined(separator: ", "))] matched any zone")
+                    lastClickedAnswer = nil
                 }
             } else {
                 // Question not found - add to unknown
@@ -658,12 +695,23 @@ final class AppModel {
             if let match = questionDatabase.findBestMatch(for: ocrResult.fullText) {
                 lastMatchedQuestion = match.question
 
-                // Find answer location on screen
-                if let answerLocation = findAnswerLocation(
-                    answer: match.question.answer,
-                    in: ocrResult,
-                    captureRect: captureRect
-                ) {
+                // Try each answer (pipe-separated) until one is found on screen
+                var answerLocation: AnswerLocation? = nil
+                var usedAnswer: String = match.question.primaryAnswer
+
+                for candidate in match.question.allAnswers {
+                    if let location = findAnswerLocation(
+                        answer: candidate,
+                        in: ocrResult,
+                        captureRect: captureRect
+                    ) {
+                        answerLocation = location
+                        usedAnswer = candidate
+                        break
+                    }
+                }
+
+                if let answerLocation = answerLocation {
                     // Click on the answer (if auto-click enabled)
                     if autoClickEnabled {
                         try await Task.sleep(nanoseconds: UInt64(clickDelay * 1_000_000_000))
@@ -679,12 +727,16 @@ final class AppModel {
                         mouseController.moveTo(awayPoint)
                     }
 
-                    lastClickedAnswer = match.question.answer
+                    lastClickedAnswer = usedAnswer
                     answeredCount += 1
 
                     if soundEnabled {
                         NSSound(named: NSSound.Name("Pop"))?.play()
                     }
+                } else {
+                    // Question matched but no answer found on screen
+                    print("[AppModel] Question matched but none of the answers [\(match.question.allAnswers.joined(separator: ", "))] found on screen")
+                    lastClickedAnswer = nil
                 }
             } else {
                 // Question not found - add to unknown
@@ -935,6 +987,15 @@ final class AppModel {
             }
             return true
         }
+
+        // Key 9 = AI fallback (keyCode 25)
+        if event.keyCode == 25 && !hasModifiers {
+            DispatchQueue.main.async { [weak self] in
+                self?.askAIAndAnswer()
+            }
+            return true
+        }
+
         return false
     }
 
@@ -942,6 +1003,107 @@ final class AppModel {
         stopMonitoring()
         if soundEnabled {
             NSSound.beep()
+        }
+    }
+
+    // MARK: - AI Fallback (Key 9)
+    /// Sends the last captured image to the AI provider and clicks the returned answer
+    func askAIAndAnswer() {
+        guard let capture = lastCapture else {
+            status = .error("No capture available — press 0 first")
+            return
+        }
+        guard aiService.isConfigured else {
+            status = .error("AI not configured — set API key in Settings")
+            return
+        }
+        guard let layout = layoutConfiguration, layout.isValid else {
+            status = .error("No layout configured")
+            return
+        }
+        guard let captureRect = selectedCaptureRect else {
+            status = .error("No capture area selected")
+            return
+        }
+        guard !isAIProcessing else { return }
+
+        Task {
+            isAIProcessing = true
+            status = .running
+
+            defer {
+                isAIProcessing = false
+                status = .idle
+            }
+
+            do {
+                let response = try await aiService.askForAnswer(image: capture)
+                let aiAnswer = response.answer.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                print("[AppModel] AI answered: \(aiAnswer) (confidence: \(response.confidence))")
+
+                // Try to match AI answer to a zone
+                var matchingZone: LayoutZone? = nil
+                let answerUpper = aiAnswer.uppercased()
+
+                // First: if AI returned a letter (A/B/C/D), click that zone directly
+                if ["A", "B", "C", "D"].contains(answerUpper) {
+                    matchingZone = layout.answerZones.first { $0.label == answerUpper }
+                }
+
+                // Second: fuzzy-match AI answer text against detected answer zones
+                if matchingZone == nil {
+                    matchingZone = findMatchingAnswerZone(
+                        correctAnswer: aiAnswer,
+                        detectedAnswers: lastDetectedAnswers,
+                        layout: layout
+                    )
+                }
+
+                if let zone = matchingZone {
+                    if autoClickEnabled {
+                        try await Task.sleep(nanoseconds: UInt64(clickDelay * 1_000_000_000))
+
+                        let clickPoint = zone.clickPoint(in: captureRect)
+                        mouseController.click(at: clickPoint, moveAwayAfter: false)
+
+                        usleep(30000)
+                        let awayPoint = CGPoint(
+                            x: captureRect.midX,
+                            y: captureRect.maxY + 50
+                        )
+                        mouseController.moveTo(awayPoint)
+                    }
+
+                    // Show what was clicked
+                    let detectedText = lastDetectedAnswers[zone.label]
+                    if let detectedText = detectedText, !detectedText.isEmpty {
+                        lastClickedAnswer = "\(zone.label) (\(detectedText)) [AI]"
+                    } else {
+                        lastClickedAnswer = "\(aiAnswer) [AI]"
+                    }
+                    answeredCount += 1
+
+                    if soundEnabled {
+                        NSSound(named: NSSound.Name("Pop"))?.play()
+                    }
+                } else {
+                    // AI gave an answer but couldn't match it to any zone
+                    lastClickedAnswer = nil
+                    print("[AppModel] AI answer '\(aiAnswer)' could not be matched to any zone")
+
+                    if soundEnabled {
+                        NSSound.beep()
+                    }
+                }
+            } catch {
+                print("[AppModel] AI error: \(error)")
+                status = .error("AI failed: \(error.localizedDescription)")
+
+                if soundEnabled {
+                    NSSound.beep()
+                }
+            }
         }
     }
 

@@ -11,6 +11,16 @@ struct QuestionAnswer: Codable, Identifiable, Hashable {
     let text: String
     let answer: String
 
+    /// All answers split by `|` separator, trimmed. For single answers this returns a one-element array.
+    var allAnswers: [String] {
+        answer.split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    /// The first (primary) answer, used for display purposes.
+    var primaryAnswer: String {
+        allAnswers.first ?? answer
+    }
+
     func hash(into hasher: inout Hasher) {
         hasher.combine(text)
     }

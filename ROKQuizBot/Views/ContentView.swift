@@ -146,7 +146,7 @@ struct ContentView: View {
                 .disabled(!canConfigureLayout)
             }
 
-            Section("Hotkey") {
+            Section("Hotkeys") {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("0")
                         .font(.system(size: 24, weight: .bold, design: .rounded))
@@ -154,6 +154,29 @@ struct ContentView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                     Text("Captures screen, finds answer, clicks it")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 4)
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("9")
+                            .font(.system(size: 24, weight: .bold, design: .rounded))
+                        if appModel.isAIProcessing {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("AI thinking...")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
+                    }
+                    Text("Press 9 key (no modifiers)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("Ask AI for answer (when no match)")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
@@ -188,6 +211,20 @@ struct ContentView: View {
                 Text(appModel.captureQuality.description)
                     .font(.caption)
                     .foregroundColor(.secondary)
+            }
+
+            Section("Debug") {
+                Toggle("Debug OCR (next capture)", isOn: $appModel.ocrDebugMode)
+                    .help("Saves 7 image variants per answer zone with OCR results")
+
+                if let path = appModel.lastDebugOutputPath {
+                    Button(action: {
+                        NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                    }) {
+                        Label("Open Debug Folder", systemImage: "folder")
+                    }
+                    .font(.caption)
+                }
             }
 
             Section("OCR Settings") {
@@ -423,6 +460,29 @@ struct ContentView: View {
                             .textSelection(.enabled)
                     }
                     .frame(maxHeight: 150)
+                }
+            }
+
+            // Debug output info
+            if let debugPath = appModel.lastDebugOutputPath {
+                GroupBox("Debug Output") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Image(systemName: "ant.circle.fill")
+                                .foregroundColor(.orange)
+                            Text("Debug images saved")
+                                .font(.headline)
+                        }
+                        Text(debugPath)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                        Button("Open in Finder") {
+                            NSWorkspace.shared.open(URL(fileURLWithPath: debugPath))
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
                 }
             }
 
